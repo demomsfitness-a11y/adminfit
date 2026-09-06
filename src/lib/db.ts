@@ -451,35 +451,63 @@ export async function createPlan(plan: Omit<MembershipPlan, 'id'>, adminEmail: s
   }
 
   const now = new Date().toISOString();
-  const toInsert = {
+  const toInsert: Record<string, any> = {
     name: plan.name.trim(),
     duration_months: Number(plan.duration_months) || 1,
     price: Number(plan.price) || 0,
-    discount: Number(plan.discount) || 0,
     description: (plan.description || '').trim(),
     is_active: plan.is_active ?? true,
     created_at: now,
     updated_at: now,
   };
 
-  console.log('Inserting plan into Supabase table "membership_plans":', toInsert);
-
-  const { data, error } = await client
-    .from('membership_plans')
-    .insert([toInsert])
-    .select()
-    .single();
-
-  if (error) {
-    console.error('Supabase plan insert error:', error);
-    if (isTableMissingError(error)) {
-      setSupabaseSchemaPending(true);
-    }
-    throw new Error(formatSupabaseError(error, 'Supabase Add Plan Failed'));
+  if (plan.discount !== undefined && Number(plan.discount) > 0) {
+    toInsert.discount = Number(plan.discount);
   }
 
-  await logActivity('Plan Created', `Created membership plan: ${data.name} (₹${data.price})`, adminEmail);
-  return data as MembershipPlan;
+  console.log('Inserting plan into Supabase table "membership_plans":', toInsert);
+
+  let currentInsert: Record<string, any> = { ...toInsert };
+  let planResult: any = null;
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { data, error } = await client
+      .from('membership_plans')
+      .insert([currentInsert])
+      .select()
+      .single();
+
+    if (!error && data) {
+      planResult = data;
+      break;
+    }
+
+    lastError = error;
+    if (error && error.code === 'PGRST204') {
+      const missingCol = extractMissingColumn(error);
+      if (missingCol && currentInsert[missingCol] !== undefined) {
+        console.warn(`[createPlan] Column "${missingCol}" is missing from "membership_plans". Auto-retrying without it...`);
+        delete currentInsert[missingCol];
+        continue;
+      }
+    }
+    break;
+  }
+
+  if (!planResult) {
+    console.error('Supabase plan insert error:', lastError);
+    if (isTableMissingError(lastError)) {
+      setSupabaseSchemaPending(true);
+    }
+    throw new Error(formatSupabaseError(lastError, 'Supabase Add Plan Failed'));
+  }
+
+  await logActivity('Plan Created', `Created membership plan: ${planResult.name} (₹${planResult.price})`, adminEmail);
+  return {
+    ...planResult,
+    discount: planResult.discount ?? 0,
+  } as MembershipPlan;
 }
 
 export async function updatePlan(id: string, updates: Partial<MembershipPlan>, adminEmail: string): Promise<MembershipPlan> {
@@ -489,28 +517,53 @@ export async function updatePlan(id: string, updates: Partial<MembershipPlan>, a
   }
 
   const now = new Date().toISOString();
-  const toUpdate = { ...updates, updated_at: now };
+  const toUpdate: Record<string, any> = { ...updates, updated_at: now };
   delete toUpdate.id;
 
   console.log(`Updating plan ${id} in Supabase:`, toUpdate);
 
-  const { data, error } = await client
-    .from('membership_plans')
-    .update(toUpdate)
-    .eq('id', id)
-    .select()
-    .single();
+  let currentUpdate: Record<string, any> = { ...toUpdate };
+  let planResult: any = null;
+  let lastError: any = null;
 
-  if (error) {
-    console.error('Supabase plan update error:', error);
-    if (isTableMissingError(error)) {
-      setSupabaseSchemaPending(true);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { data, error } = await client
+      .from('membership_plans')
+      .update(currentUpdate)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (!error && data) {
+      planResult = data;
+      break;
     }
-    throw new Error(formatSupabaseError(error, 'Supabase Update Plan Failed'));
+
+    lastError = error;
+    if (error && error.code === 'PGRST204') {
+      const missingCol = extractMissingColumn(error);
+      if (missingCol && currentUpdate[missingCol] !== undefined) {
+        console.warn(`[updatePlan] Column "${missingCol}" is missing from "membership_plans". Auto-retrying without it...`);
+        delete currentUpdate[missingCol];
+        continue;
+      }
+    }
+    break;
   }
 
-  await logActivity('Plan Updated', `Updated plan: ${data.name}`, adminEmail);
-  return data as MembershipPlan;
+  if (!planResult) {
+    console.error('Supabase plan update error:', lastError);
+    if (isTableMissingError(lastError)) {
+      setSupabaseSchemaPending(true);
+    }
+    throw new Error(formatSupabaseError(lastError, 'Supabase Update Plan Failed'));
+  }
+
+  await logActivity('Plan Updated', `Updated plan: ${planResult.name}`, adminEmail);
+  return {
+    ...planResult,
+    discount: planResult.discount ?? 0,
+  } as MembershipPlan;
 }
 
 export async function deletePlan(id: string, planName: string, adminEmail: string): Promise<void> {
@@ -756,7 +809,19 @@ export async function fetchGymSettings(): Promise<GymSettings> {
   try {
     const { data, error } = await client.from('gym_settings').select('*').limit(1);
     if (!error && data && data.length > 0) {
-      return data[0] as GymSettings;
+      const raw = data[0] as any;
+      return {
+        id: raw.id,
+        gym_name: raw.gym_name || 'MS Fitness',
+        tagline: raw.tagline || '',
+        phone: raw.phone || raw.contact_number || '',
+        email: raw.email || raw.contact_email || '',
+        address: raw.address || '',
+        upi_id: raw.upi_id || '',
+        logo_url: raw.logo_url || '',
+        created_at: raw.created_at,
+        updated_at: raw.updated_at,
+      };
     }
 
     if (error && isTableMissingError(error)) {
@@ -771,7 +836,19 @@ export async function fetchGymSettings(): Promise<GymSettings> {
       .single();
 
     if (!insertErr && inserted) {
-      return inserted as GymSettings;
+      const raw = inserted as any;
+      return {
+        id: raw.id,
+        gym_name: raw.gym_name || 'MS Fitness',
+        tagline: raw.tagline || '',
+        phone: raw.phone || raw.contact_number || '',
+        email: raw.email || raw.contact_email || '',
+        address: raw.address || '',
+        upi_id: raw.upi_id || '',
+        logo_url: raw.logo_url || '',
+        created_at: raw.created_at,
+        updated_at: raw.updated_at,
+      };
     }
   } catch (err) {
     console.warn('Could not query gym settings from Supabase:', err);
@@ -787,16 +864,29 @@ export async function updateGymSettings(settings: Partial<GymSettings>, adminEma
   }
 
   const now = new Date().toISOString();
+  const phoneVal = (settings.phone || '').trim();
+  const emailVal = (settings.email || '').trim();
+
+  // Populate base fields and alternative column names for full schema compatibility
   const toSave: Record<string, any> = {
     gym_name: (settings.gym_name || 'MS Fitness').trim(),
     tagline: (settings.tagline || '').trim(),
-    phone: (settings.phone || '').trim(),
-    email: (settings.email || '').trim(),
     address: (settings.address || '').trim(),
-    upi_id: (settings.upi_id || '').trim(),
     logo_url: (settings.logo_url || '').trim(),
     updated_at: now,
   };
+
+  if (emailVal) {
+    toSave.email = emailVal;
+    toSave.contact_email = emailVal;
+  }
+  if (phoneVal) {
+    toSave.phone = phoneVal;
+    toSave.contact_number = phoneVal;
+  }
+  if (settings.upi_id !== undefined) {
+    toSave.upi_id = (settings.upi_id || '').trim();
+  }
 
   console.log('Updating gym settings in Supabase table "gym_settings":', toSave);
 
@@ -808,40 +898,70 @@ export async function updateGymSettings(settings: Partial<GymSettings>, adminEma
     throw new Error(formatSupabaseError(selectErr, 'Gym Settings table does not exist in Supabase'));
   }
 
-  let resultRow: GymSettings;
+  let resultRow: any = null;
+  let currentSave: Record<string, any> = { ...toSave };
+  let lastError: any = null;
 
-  if (existing && existing.length > 0) {
-    const { data, error } = await client
-      .from('gym_settings')
-      .update(toSave)
-      .eq('id', existing[0].id)
-      .select()
-      .single();
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (existing && existing.length > 0) {
+      const { data, error } = await client
+        .from('gym_settings')
+        .update(currentSave)
+        .eq('id', existing[0].id)
+        .select()
+        .single();
 
-    if (error) {
-      console.error('Supabase settings update error:', error);
-      if (isTableMissingError(error)) setSupabaseSchemaPending(true);
-      throw new Error(formatSupabaseError(error, 'Supabase Update Settings Failed'));
+      if (!error && data) {
+        resultRow = data;
+        break;
+      }
+      lastError = error;
+    } else {
+      const { data, error } = await client
+        .from('gym_settings')
+        .insert([currentSave])
+        .select()
+        .single();
+
+      if (!error && data) {
+        resultRow = data;
+        break;
+      }
+      lastError = error;
     }
-    resultRow = data as GymSettings;
-  } else {
-    const { data, error } = await client
-      .from('gym_settings')
-      .insert([toSave])
-      .select()
-      .single();
 
-    if (error) {
-      console.error('Supabase settings insert error:', error);
-      if (isTableMissingError(error)) setSupabaseSchemaPending(true);
-      throw new Error(formatSupabaseError(error, 'Supabase Insert Settings Failed'));
+    if (lastError && lastError.code === 'PGRST204') {
+      const missingCol = extractMissingColumn(lastError);
+      if (missingCol && currentSave[missingCol] !== undefined) {
+        console.warn(`[updateGymSettings] Column "${missingCol}" is missing from "gym_settings". Auto-retrying without it...`);
+        delete currentSave[missingCol];
+        continue;
+      }
     }
-    resultRow = data as GymSettings;
+    break;
+  }
+
+  if (!resultRow) {
+    console.error('Supabase settings update error:', lastError);
+    if (isTableMissingError(lastError)) setSupabaseSchemaPending(true);
+    throw new Error(formatSupabaseError(lastError, 'Supabase Update Settings Failed'));
   }
 
   setSupabaseSchemaPending(false);
   await logActivity('Settings Updated', 'Gym settings and branding details updated in Supabase', adminEmail);
-  return resultRow;
+
+  return {
+    id: resultRow.id,
+    gym_name: resultRow.gym_name || 'MS Fitness',
+    tagline: resultRow.tagline || '',
+    phone: resultRow.phone || resultRow.contact_number || phoneVal,
+    email: resultRow.email || resultRow.contact_email || emailVal,
+    address: resultRow.address || '',
+    upi_id: resultRow.upi_id || settings.upi_id || '',
+    logo_url: resultRow.logo_url || '',
+    created_at: resultRow.created_at,
+    updated_at: resultRow.updated_at,
+  };
 }
 
 // ---------------- DASHBOARD STATS ----------------

@@ -10,36 +10,70 @@ export const SUPABASE_DASHBOARD_SQL_URL = `https://supabase.com/dashboard/projec
 const STORAGE_URL_KEY = 'ms_fitness_supabase_url';
 const STORAGE_KEY_KEY = 'ms_fitness_supabase_anon_key';
 
-export function getSupabaseCredentials() {
+function isValidUrl(val: any): boolean {
+  if (!val || typeof val !== 'string') return false;
+  const trimmed = val.trim();
+  if (!trimmed || trimmed === 'undefined' || trimmed === 'null' || trimmed.includes('your-project.supabase.co')) {
+    return false;
+  }
+  return trimmed.startsWith('http://') || trimmed.startsWith('https://');
+}
+
+function isValidKey(val: any): boolean {
+  if (!val || typeof val !== 'string') return false;
+  const trimmed = val.trim();
+  if (!trimmed || trimmed === 'undefined' || trimmed === 'null' || trimmed === 'your-anon-key') {
+    return false;
+  }
+  return trimmed.length > 20;
+}
+
+export function getSupabaseCredentials(): { url: string; anonKey: string } {
   const metaEnv = (import.meta as any).env || {};
   const envUrl = metaEnv.VITE_SUPABASE_URL;
   const envKey = metaEnv.VITE_SUPABASE_ANON_KEY;
-  const localUrl = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_URL_KEY) : null;
-  const localKey = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY_KEY) : null;
 
-  // Prefer local/env if valid custom value provided, otherwise fall back to user's project credentials
-  const url = (localUrl && localUrl.trim() !== '' && localUrl !== 'https://your-project.supabase.co')
-    ? localUrl.trim()
-    : (envUrl && envUrl !== 'https://your-project.supabase.co' ? envUrl.trim() : DEFAULT_SUPABASE_URL);
+  let localUrl: string | null = null;
+  let localKey: string | null = null;
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      localUrl = localStorage.getItem(STORAGE_URL_KEY);
+      localKey = localStorage.getItem(STORAGE_KEY_KEY);
+    }
+  } catch (e) {
+    console.warn('LocalStorage access warning:', e);
+  }
 
-  const anonKey = (localKey && localKey.trim() !== '' && localKey !== 'your-anon-key')
-    ? localKey.trim()
-    : (envKey && envKey !== 'your-anon-key' ? envKey.trim() : DEFAULT_SUPABASE_ANON_KEY);
+  // Determine URL: custom valid local -> valid env -> default fallback
+  let url = DEFAULT_SUPABASE_URL;
+  if (isValidUrl(localUrl)) {
+    url = localUrl!.trim();
+  } else if (isValidUrl(envUrl)) {
+    url = envUrl.trim();
+  }
+
+  // Determine Anon Key: custom valid local -> valid env -> default fallback
+  let anonKey = DEFAULT_SUPABASE_ANON_KEY;
+  if (isValidKey(localKey)) {
+    anonKey = localKey!.trim();
+  } else if (isValidKey(envKey)) {
+    anonKey = envKey.trim();
+  }
 
   return { url, anonKey };
 }
 
 export function saveSupabaseCredentials(url: string, anonKey: string) {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem(STORAGE_URL_KEY, url.trim());
-    localStorage.setItem(STORAGE_KEY_KEY, anonKey.trim());
+  if (typeof window !== 'undefined' && window.localStorage) {
+    if (url && url.trim()) localStorage.setItem(STORAGE_URL_KEY, url.trim());
+    if (anonKey && anonKey.trim()) localStorage.setItem(STORAGE_KEY_KEY, anonKey.trim());
   }
   // Re-init client
   initSupabaseClient();
 }
 
 export function clearSupabaseCredentials() {
-  if (typeof window !== 'undefined') {
+  if (typeof window !== 'undefined' && window.localStorage) {
     localStorage.removeItem(STORAGE_URL_KEY);
     localStorage.removeItem(STORAGE_KEY_KEY);
   }
@@ -63,13 +97,24 @@ export function initSupabaseClient(): SupabaseClient | null {
       return supabase;
     } catch (err) {
       console.error('Failed to initialize Supabase client:', err);
-      supabase = null;
-      return null;
+      // Fallback to default
+      try {
+        supabase = createClient(DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_ANON_KEY);
+        return supabase;
+      } catch {
+        supabase = null;
+        return null;
+      }
     }
   }
 
-  supabase = null;
-  return null;
+  try {
+    supabase = createClient(DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_ANON_KEY);
+    return supabase;
+  } catch {
+    supabase = null;
+    return null;
+  }
 }
 
 // Initial client call
@@ -286,11 +331,33 @@ CREATE POLICY "logs_all_access" ON public.activity_logs
 `;
 
 export const SUPABASE_FIX_COLUMNS_SQL = `-- Run this in Supabase SQL Editor to add any missing columns to your existing tables:
+-- 1. MEMBERS table columns
 ALTER TABLE public.members ADD COLUMN IF NOT EXISTS dob DATE;
 ALTER TABLE public.members ADD COLUMN IF NOT EXISTS gender TEXT DEFAULT 'male';
 ALTER TABLE public.members ADD COLUMN IF NOT EXISTS address TEXT DEFAULT '';
 ALTER TABLE public.members ADD COLUMN IF NOT EXISTS emergency_contact TEXT DEFAULT '';
 ALTER TABLE public.members ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT '';
 ALTER TABLE public.members ADD COLUMN IF NOT EXISTS remaining_balance NUMERIC(10, 2) NOT NULL DEFAULT 0;
+
+-- 2. MEMBERSHIP PLANS table columns
+ALTER TABLE public.membership_plans ADD COLUMN IF NOT EXISTS discount NUMERIC(10, 2) NOT NULL DEFAULT 0;
+ALTER TABLE public.membership_plans ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
+ALTER TABLE public.membership_plans ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+
+-- 3. GYM SETTINGS table columns (handles both naming conventions)
+ALTER TABLE public.gym_settings ADD COLUMN IF NOT EXISTS email TEXT DEFAULT '';
+ALTER TABLE public.gym_settings ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT '';
+ALTER TABLE public.gym_settings ADD COLUMN IF NOT EXISTS upi_id TEXT DEFAULT '';
+ALTER TABLE public.gym_settings ADD COLUMN IF NOT EXISTS contact_number TEXT DEFAULT '';
+ALTER TABLE public.gym_settings ADD COLUMN IF NOT EXISTS contact_email TEXT DEFAULT '';
+ALTER TABLE public.gym_settings ADD COLUMN IF NOT EXISTS tagline TEXT DEFAULT '';
+ALTER TABLE public.gym_settings ADD COLUMN IF NOT EXISTS address TEXT DEFAULT '';
+ALTER TABLE public.gym_settings ADD COLUMN IF NOT EXISTS logo_url TEXT DEFAULT '';
+
+-- 4. PAYMENTS table columns
 ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS plan_name TEXT DEFAULT 'Membership Fee';
+ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS discount NUMERIC(10, 2) NOT NULL DEFAULT 0;
+ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS previous_balance NUMERIC(10, 2) NOT NULL DEFAULT 0;
+ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS total_due NUMERIC(10, 2) NOT NULL DEFAULT 0;
+ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS remaining_balance NUMERIC(10, 2) NOT NULL DEFAULT 0;
 `;
