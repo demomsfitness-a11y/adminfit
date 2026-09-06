@@ -14,9 +14,14 @@ import {
   Clock,
   Sparkles,
   User,
-  ArrowRight
+  ArrowRight,
+  Mail,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
 import { generateReceiptPdf } from '../lib/pdfReceipt';
+import { sendReceiptEmail } from '../lib/emailReceipt';
+import { resolveMemberPlanName, extractUpiTransactionNumber } from '../lib/planUtils';
 
 interface Props {
   members: Member[];
@@ -51,6 +56,7 @@ export const PaymentsView: React.FC<Props> = ({
   const [discount, setDiscount] = useState<number>(0);
   const [amountPaid, setAmountPaid] = useState<number>(0);
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'UPI'>('Cash');
+  const [upiTransactionNumber, setUpiTransactionNumber] = useState<string>('');
   const [paymentDate, setPaymentDate] = useState<string>(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState<string>('');
   const [renewMonths, setRenewMonths] = useState<number>(0);
@@ -60,6 +66,14 @@ export const PaymentsView: React.FC<Props> = ({
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successPayment, setSuccessPayment] = useState<Payment | null>(null);
+
+  // Email status state
+  const [sendingPaymentId, setSendingPaymentId] = useState<string | null>(null);
+  const [emailAlert, setEmailAlert] = useState<{
+    type: 'success' | 'error';
+    message: string;
+    paymentId?: string;
+  } | null>(null);
 
   // History search filter
   const [historySearch, setHistorySearch] = useState<string>('');
@@ -76,6 +90,7 @@ export const PaymentsView: React.FC<Props> = ({
     setMemberSearch(`${m.name} (${m.member_id})`);
     setErrorMsg(null);
     setSuccessPayment(null);
+    setUpiTransactionNumber('');
 
     // Load member plan info
     const plan = plans.find((p) => p.id === m.plan_id);
@@ -157,6 +172,38 @@ export const PaymentsView: React.FC<Props> = ({
     if (!successPayment) return;
     const member = members.find((m) => m.id === successPayment.member_id);
     generateReceiptPdf(successPayment, member, settings, adminEmail);
+  };
+
+  const handleSendReceiptEmail = async (p: Payment) => {
+    if (sendingPaymentId) return; // Prevent multiple clicks while sending
+    setSendingPaymentId(p.id);
+    setEmailAlert(null);
+
+    const member = members.find((m) => m.id === p.member_id);
+    try {
+      const result = await sendReceiptEmail(p, member, settings, adminEmail);
+      if (result.success) {
+        setEmailAlert({
+          type: 'success',
+          message: result.message,
+          paymentId: p.id,
+        });
+      } else {
+        setEmailAlert({
+          type: 'error',
+          message: result.message || 'Customer email address not found. Please update the member profile first.',
+          paymentId: p.id,
+        });
+      }
+    } catch (err: any) {
+      setEmailAlert({
+        type: 'error',
+        message: err.message || 'Failed to dispatch email receipt.',
+        paymentId: p.id,
+      });
+    } finally {
+      setSendingPaymentId(null);
+    }
   };
 
   const resetFormAfterSuccess = () => {
@@ -519,6 +566,24 @@ export const PaymentsView: React.FC<Props> = ({
 
               <div className="space-y-2">
                 <button
+                  onClick={() => handleSendReceiptEmail(successPayment)}
+                  disabled={sendingPaymentId === successPayment.id}
+                  className="w-full py-3 rounded-2xl bg-red-950/60 border border-red-800/60 hover:bg-red-900/70 text-red-200 hover:text-white font-bold text-xs flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-red-950/30"
+                >
+                  {sendingPaymentId === successPayment.id ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-red-400" />
+                      <span>Sending Receipt...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mail className="w-4 h-4 text-red-400" />
+                      <span>Send Receipt Email</span>
+                    </>
+                  )}
+                </button>
+
+                <button
                   onClick={handleDownloadSuccessPdf}
                   className="w-full py-3 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-lg shadow-red-600/20"
                 >
@@ -613,6 +678,32 @@ export const PaymentsView: React.FC<Props> = ({
           </div>
         </div>
 
+        {/* Email feedback alert */}
+        {emailAlert && (
+          <div
+            className={`p-4 rounded-2xl border text-xs flex items-center justify-between gap-3 ${
+              emailAlert.type === 'success'
+                ? 'bg-emerald-950/70 border-emerald-800/80 text-emerald-300'
+                : 'bg-rose-950/70 border-rose-800/80 text-rose-300'
+            }`}
+          >
+            <div className="flex items-center gap-2.5">
+              {emailAlert.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              )}
+              <span className="font-medium">{emailAlert.message}</span>
+            </div>
+            <button
+              onClick={() => setEmailAlert(null)}
+              className="text-[10px] uppercase font-bold tracking-wider opacity-70 hover:opacity-100"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           {filteredPayments.length === 0 ? (
             <div className="text-center py-12 text-neutral-500 text-xs">
@@ -629,12 +720,26 @@ export const PaymentsView: React.FC<Props> = ({
                   <th className="py-3.5 px-4">Amount Paid</th>
                   <th className="py-3.5 px-4">Remaining Due</th>
                   <th className="py-3.5 px-4">Method</th>
-                  <th className="py-3.5 px-4 text-right">Receipt</th>
+                  <th className="py-3.5 px-4 text-right">Actions & Email</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-800/80 text-neutral-200">
                 {filteredPayments.map((p) => {
-                  const member = members.find((m) => m.id === p.member_id);
+                  const member = members.find((m) => m.id === p.member_id || m.member_id === p.member_id || m.member_id === p.member_code) || {
+                    id: p.member_id,
+                    member_id: p.member_code || 'N/A',
+                    name: p.member_name || 'Member',
+                    mobile: p.member_mobile || 'N/A',
+                    email: (p as any).member_email || '',
+                    gender: 'other' as const,
+                    join_date: (p as any).join_date || p.payment_date,
+                    plan_amount: Number(p.total_due || p.amount),
+                    discount: Number(p.discount || 0),
+                    membership_start: (p as any).membership_start || p.payment_date,
+                    membership_expiry: (p as any).membership_expiry || '',
+                    status: 'active' as const,
+                  };
+                  const isSendingThis = sendingPaymentId === p.id;
 
                   return (
                     <tr key={p.id} className="hover:bg-neutral-800/40 transition-colors">
@@ -664,20 +769,43 @@ export const PaymentsView: React.FC<Props> = ({
                         </span>
                       </td>
                       <td className="py-3.5 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
+                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
                           <button
                             onClick={() => onViewReceipt(p)}
-                            title="View Receipt"
-                            className="p-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200"
+                            title="View & Print Official Receipt"
+                            className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white font-medium flex items-center gap-1.5 transition-colors text-[11px]"
                           >
-                            <Eye className="w-3.5 h-3.5" />
+                            <Eye className="w-3.5 h-3.5 text-neutral-300" />
+                            <span>View Receipt</span>
                           </button>
                           <button
                             onClick={() => generateReceiptPdf(p, member, settings, adminEmail)}
-                            title="Download PDF"
-                            className="p-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white"
+                            title="Download PDF Receipt"
+                            className="p-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors shadow-sm"
                           >
                             <Download className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleSendReceiptEmail(p)}
+                            disabled={isSendingThis || !!sendingPaymentId}
+                            title={
+                              isSendingThis
+                                ? 'Sending Receipt...'
+                                : `Send PDF Receipt Email to ${member?.email || 'customer'}`
+                            }
+                            className="px-2.5 py-1.5 rounded-lg bg-red-950/50 border border-red-800/50 hover:bg-red-900/60 text-red-300 hover:text-white font-medium flex items-center gap-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {isSendingThis ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-red-400" />
+                                <span className="text-[11px]">Sending...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Mail className="w-3.5 h-3.5 text-red-400" />
+                                <span className="text-[11px] hidden lg:inline">Send Email</span>
+                              </>
+                            )}
                           </button>
                         </div>
                       </td>

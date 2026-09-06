@@ -1,6 +1,7 @@
 import React from 'react';
 import { Member, Payment, DashboardStats, MembershipPlan } from '../types';
 import { computeDashboardStats } from '../lib/db';
+import { getDashboardExpiryCounts } from '../lib/whatsappReminder';
 import {
   Users,
   UserCheck,
@@ -66,6 +67,9 @@ export const DashboardView: React.FC<Props> = ({
   const recentMembers = (members || []).slice(0, 5);
   const recentPayments = (payments || []).slice(0, 5);
 
+  // Compute 15-day, 7-day, 3-day expiry counts for summary card
+  const expiryCounts = getDashboardExpiryCounts(members || []);
+
   return (
     <div className="space-y-8 animate-in fade-in duration-200">
       {/* Welcome Banner with Quick Actions */}
@@ -96,6 +100,74 @@ export const DashboardView: React.FC<Props> = ({
           >
             <CreditCard className="w-4 h-4 text-red-500" /> Collect Fee
           </button>
+        </div>
+      </div>
+
+      {/* Requirement 3: Dedicated Dashboard Expiry Summary Card */}
+      <div
+        onClick={() => onNavigate('expiry')}
+        className="bg-neutral-900/90 border border-neutral-800 hover:border-amber-500/50 rounded-3xl p-5 md:p-6 cursor-pointer transition-all hover:bg-neutral-900/95 group shadow-xl shadow-black/20"
+        title="Click to view Membership Expiring Soon list"
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-neutral-800/80 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 group-hover:scale-105 transition-transform">
+              <ClockAlert className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white tracking-wide font-display flex items-center gap-2">
+                <span>MEMBERSHIP EXPIRY</span>
+                <span className="text-[10px] uppercase px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 font-bold">
+                  Action Required
+                </span>
+              </h3>
+              <p className="text-xs text-neutral-400">
+                Impending membership renewals & WhatsApp reminder alerts
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-amber-400 font-bold group-hover:text-amber-300">
+            <span>View Expiring Soon List</span>
+            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+          <div className="bg-neutral-950/80 rounded-2xl p-4 border border-amber-950/60 hover:border-amber-700/60 transition-colors">
+            <span className="text-[11px] text-neutral-400 font-semibold uppercase tracking-wider block">
+              Expiring in 15 Days
+            </span>
+            <div className="text-3xl font-black text-amber-400 font-display mt-1">
+              {expiryCounts.expiringIn15Days}
+            </div>
+            <span className="text-[11px] text-neutral-500 mt-0.5 block">
+              Members expiring within 15 days
+            </span>
+          </div>
+
+          <div className="bg-neutral-950/80 rounded-2xl p-4 border border-orange-950/60 hover:border-orange-700/60 transition-colors">
+            <span className="text-[11px] text-orange-400 font-semibold uppercase tracking-wider block">
+              Expiring in 7 Days
+            </span>
+            <div className="text-3xl font-black text-orange-400 font-display mt-1">
+              {expiryCounts.expiringIn7Days}
+            </div>
+            <span className="text-[11px] text-neutral-500 mt-0.5 block">
+              Urgent upcoming renewal dues
+            </span>
+          </div>
+
+          <div className="bg-neutral-950/80 rounded-2xl p-4 border border-rose-950/60 hover:border-rose-700/60 transition-colors">
+            <span className="text-[11px] text-rose-400 font-semibold uppercase tracking-wider block">
+              Expiring in 3 Days
+            </span>
+            <div className="text-3xl font-black text-rose-400 font-display mt-1">
+              {expiryCounts.expiringIn3Days}
+            </div>
+            <span className="text-[11px] text-neutral-500 mt-0.5 block">
+              Expires very soon (Send WhatsApp)
+            </span>
+          </div>
         </div>
       </div>
 

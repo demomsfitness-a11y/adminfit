@@ -398,7 +398,7 @@ export default function App() {
 
   // Find member for viewing receipt modal
   const viewingReceiptMember = viewingReceipt
-    ? members.find((m) => m.id === viewingReceipt.member_id)
+    ? members.find((m) => m.id === viewingReceipt.member_id || m.member_id === viewingReceipt.member_id || m.member_id === viewingReceipt.member_code)
     : undefined;
 
   return (
@@ -568,8 +568,10 @@ export default function App() {
       {/* MODAL: VIEW & PRINT RECEIPT */}
       {viewingReceipt && (
         <ReceiptModal
+          isOpen={true}
           payment={viewingReceipt}
           member={viewingReceiptMember}
+          plans={plans}
           settings={settings}
           adminEmail={adminEmail}
           onClose={() => setViewingReceipt(null)}

@@ -45,6 +45,7 @@ export interface Payment {
   total_due: number;
   remaining_balance: number;
   payment_method: 'Cash' | 'UPI';
+  transaction_number?: string;
   payment_date: string;
   notes?: string;
   created_at?: string;
@@ -52,6 +53,10 @@ export interface Payment {
   member_name?: string;
   member_code?: string;
   member_mobile?: string;
+  member_email?: string;
+  membership_start?: string;
+  membership_expiry?: string;
+  join_date?: string;
   plan_name?: string;
   admin_email?: string;
 }

@@ -1,4 +1,5 @@
 import { getSupabase, isSupabaseConfigured } from './supabase';
+import { extractUpiTransactionNumber } from './planUtils';
 import {
   Member,
   MembershipPlan,
@@ -84,10 +85,35 @@ export function extractMissingColumn(error: any): string | null {
   if (!error) return null;
   const msg = String(error.message || '');
   const details = String(error.details || '');
-  const combined = `${msg} ${details}`;
-  const match = combined.match(/could not find the '([^']+)' column/i);
+  const hint = String(error.hint || '');
+  const combined = `${msg} ${details} ${hint}`;
+  const match = combined.match(/could not find the ['"]([^'"]+)['"] column/i)
+    || combined.match(/column ['"]([^'"]+)['"] of/i)
+    || combined.match(/['"]([^'"]+)['"] column of/i);
   if (match && match[1]) {
     return match[1];
+  }
+  return null;
+}
+
+// In-memory cache of known table columns to prevent PGRST204 before hitting the database
+const tableColumnsCache: Record<string, Set<string>> = {};
+
+export async function getKnownTableColumns(tableName: string): Promise<Set<string> | null> {
+  if (tableColumnsCache[tableName] && tableColumnsCache[tableName].size > 0) {
+    return tableColumnsCache[tableName];
+  }
+  const client = getSupabase();
+  if (!client) return null;
+  try {
+    const { data, error } = await client.from(tableName).select('*').limit(1);
+    if (!error && data && data.length > 0) {
+      const cols = new Set(Object.keys(data[0]));
+      tableColumnsCache[tableName] = cols;
+      return cols;
+    }
+  } catch (e) {
+    console.warn(`Could not inspect schema for table "${tableName}":`, e);
   }
   return null;
 }
@@ -187,7 +213,18 @@ export async function fetchMembers(): Promise<Member[]> {
   }
 
   setSupabaseSchemaPending(false);
-  return (data || []) as Member[];
+  const mapped = (data || []).map((m: any) => {
+    let planId = m.plan_id;
+    if (!planId && m.notes) {
+      const match = m.notes.match(/\[PLAN_ID:([a-zA-Z0-9_-]+)\]/);
+      if (match) planId = match[1];
+    }
+    return {
+      ...m,
+      plan_id: planId,
+    };
+  }) as Member[];
+  return mapped;
 }
 
 export async function generateNextMemberId(): Promise<string> {
@@ -250,16 +287,28 @@ export async function createMember(memberData: Omit<Member, 'id'>, adminEmail: s
     updated_at: now,
   };
 
-  // Nullable DATE: Must be valid date string or NULL (never empty string '')
-  if (memberData.dob && memberData.dob.trim() !== '') {
-    insertPayload.dob = memberData.dob.trim();
-  } else {
-    insertPayload.dob = null;
+  // Nullable DATE: Only include if table has dob column and value is valid
+  const memberCols = await getKnownTableColumns('members');
+  if (memberCols && memberCols.has('dob')) {
+    if (memberData.dob && memberData.dob.trim() !== '') {
+      insertPayload.dob = memberData.dob.trim();
+    } else {
+      insertPayload.dob = null;
+    }
+  } else if (!memberCols) {
+    // If schema unknown, only include if user provided a value
+    if (memberData.dob && memberData.dob.trim() !== '') {
+      insertPayload.dob = memberData.dob.trim();
+    }
   }
 
   // Nullable UUID: Must be valid UUID or NULL (never empty string '')
   if (memberData.plan_id && isValidUuid(memberData.plan_id)) {
     insertPayload.plan_id = memberData.plan_id.trim();
+    const planTag = `[PLAN_ID:${memberData.plan_id.trim()}]`;
+    if (!insertPayload.notes.includes(planTag)) {
+      insertPayload.notes = insertPayload.notes ? `${insertPayload.notes} ${planTag}` : planTag;
+    }
   } else {
     insertPayload.plan_id = null;
   }
@@ -321,12 +370,29 @@ export async function updateMember(id: string, updates: Partial<Member>, adminEm
   };
   delete updatePayload.id;
 
+  const memberCols = await getKnownTableColumns('members');
   if (updates.dob !== undefined) {
-    updatePayload.dob = updates.dob && updates.dob.trim() !== '' ? updates.dob.trim() : null;
+    if (memberCols && memberCols.has('dob')) {
+      updatePayload.dob = updates.dob && updates.dob.trim() !== '' ? updates.dob.trim() : null;
+    } else if (!memberCols && updates.dob && updates.dob.trim() !== '') {
+      updatePayload.dob = updates.dob.trim();
+    } else {
+      delete updatePayload.dob;
+    }
   }
 
   if (updates.plan_id !== undefined) {
     updatePayload.plan_id = isValidUuid(updates.plan_id) ? updates.plan_id.trim() : null;
+    if (updates.plan_id && isValidUuid(updates.plan_id)) {
+      const planTag = `[PLAN_ID:${updates.plan_id.trim()}]`;
+      let curNotes = updatePayload.notes || '';
+      if (curNotes.includes('[PLAN_ID:')) {
+        curNotes = curNotes.replace(/\[PLAN_ID:[a-zA-Z0-9_-]+\]/, planTag);
+      } else {
+        curNotes = curNotes ? `${curNotes} ${planTag}` : planTag;
+      }
+      updatePayload.notes = curNotes;
+    }
   }
 
   console.log(`Updating member ${id} in Supabase:`, updatePayload);
@@ -461,8 +527,11 @@ export async function createPlan(plan: Omit<MembershipPlan, 'id'>, adminEmail: s
     updated_at: now,
   };
 
+  const planCols = await getKnownTableColumns('membership_plans');
   if (plan.discount !== undefined && Number(plan.discount) > 0) {
-    toInsert.discount = Number(plan.discount);
+    if (!planCols || planCols.has('discount')) {
+      toInsert.discount = Number(plan.discount);
+    }
   }
 
   console.log('Inserting plan into Supabase table "membership_plans":', toInsert);
@@ -519,6 +588,11 @@ export async function updatePlan(id: string, updates: Partial<MembershipPlan>, a
   const now = new Date().toISOString();
   const toUpdate: Record<string, any> = { ...updates, updated_at: now };
   delete toUpdate.id;
+
+  const planCols = await getKnownTableColumns('membership_plans');
+  if (toUpdate.discount !== undefined && planCols && !planCols.has('discount')) {
+    delete toUpdate.discount;
+  }
 
   console.log(`Updating plan ${id} in Supabase:`, toUpdate);
 
@@ -597,7 +671,7 @@ export async function fetchPayments(): Promise<Payment[]> {
 
   const { data, error } = await client
     .from('payments')
-    .select('*, members(name, member_id, mobile)')
+    .select('*, members(name, member_id, mobile, email, membership_start, membership_expiry, join_date)')
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -610,12 +684,20 @@ export async function fetchPayments(): Promise<Payment[]> {
 
   setSupabaseSchemaPending(false);
 
-  const mapped = (data || []).map((p: any) => ({
-    ...p,
-    member_name: p.members?.name || 'Member',
-    member_code: p.members?.member_id || '',
-    member_mobile: p.members?.mobile || '',
-  })) as Payment[];
+  const mapped = (data || []).map((p: any) => {
+    const txnNum = p.transaction_number || extractUpiTransactionNumber(p.notes);
+    return {
+      ...p,
+      transaction_number: txnNum,
+      member_name: p.members?.name || 'Member',
+      member_code: p.members?.member_id || '',
+      member_mobile: p.members?.mobile || '',
+      member_email: p.members?.email || '',
+      membership_start: p.members?.membership_start || '',
+      membership_expiry: p.members?.membership_expiry || '',
+      join_date: p.members?.join_date || '',
+    };
+  }) as Payment[];
 
   return mapped;
 }
@@ -675,6 +757,7 @@ export async function createPayment(
     total_due: number;
     remaining_balance: number;
     payment_method: 'Cash' | 'UPI';
+    transaction_number?: string;
     payment_date: string;
     notes?: string;
     plan_name?: string;
@@ -697,7 +780,18 @@ export async function createPayment(
   const { paymentId, receiptNumber } = generatePaymentAndReceiptIds();
   const now = new Date().toISOString();
 
-  const record = {
+  const isUpi = paymentData.payment_method === 'UPI';
+  const cleanTxn = isUpi && paymentData.transaction_number ? paymentData.transaction_number.trim() : undefined;
+
+  let notesVal = (paymentData.notes || '').trim();
+  if (cleanTxn) {
+    const txnTag = `UPI Txn: ${cleanTxn}`;
+    if (!notesVal.includes(cleanTxn)) {
+      notesVal = notesVal ? `${notesVal} | ${txnTag}` : txnTag;
+    }
+  }
+
+  const record: Record<string, any> = {
     payment_id: paymentId,
     receipt_number: receiptNumber,
     member_id: paymentData.member_id,
@@ -708,10 +802,14 @@ export async function createPayment(
     remaining_balance: Number(paymentData.remaining_balance) || 0,
     payment_method: paymentData.payment_method || 'Cash',
     payment_date: paymentData.payment_date || now.slice(0, 10),
-    notes: (paymentData.notes || '').trim(),
+    notes: notesVal,
     plan_name: (paymentData.plan_name || 'Membership Fee').trim(),
     created_at: now,
   };
+
+  if (cleanTxn) {
+    record.transaction_number = cleanTxn;
+  }
 
   console.log('Inserting payment into Supabase table "payments":', record);
 
@@ -784,12 +882,13 @@ export async function createPayment(
 
   await logActivity(
     'Payment Recorded',
-    `Payment of ₹${paymentData.amount} received (${paymentData.payment_method}) - ID: ${paymentId}`,
+    `Payment of ₹${paymentData.amount} received (${paymentData.payment_method}${cleanTxn ? ` - Txn: ${cleanTxn}` : ''}) - ID: ${paymentId}`,
     adminEmail
   );
 
   const createdPayment: Payment = {
     ...(data as Payment),
+    transaction_number: cleanTxn || data.transaction_number || extractUpiTransactionNumber(notesVal),
     member_name: data.members?.name || 'Member',
     member_code: data.members?.member_id || '',
     member_mobile: data.members?.mobile || '',
@@ -867,47 +966,81 @@ export async function updateGymSettings(settings: Partial<GymSettings>, adminEma
   const phoneVal = (settings.phone || '').trim();
   const emailVal = (settings.email || '').trim();
 
-  // Populate base fields and alternative column names for full schema compatibility
-  const toSave: Record<string, any> = {
-    gym_name: (settings.gym_name || 'MS Fitness').trim(),
-    tagline: (settings.tagline || '').trim(),
-    address: (settings.address || '').trim(),
-    logo_url: (settings.logo_url || '').trim(),
-    updated_at: now,
-  };
-
-  if (emailVal) {
-    toSave.email = emailVal;
-    toSave.contact_email = emailVal;
-  }
-  if (phoneVal) {
-    toSave.phone = phoneVal;
-    toSave.contact_number = phoneVal;
-  }
-  if (settings.upi_id !== undefined) {
-    toSave.upi_id = (settings.upi_id || '').trim();
-  }
-
-  console.log('Updating gym settings in Supabase table "gym_settings":', toSave);
-
-  // Check if existing row exists
-  const { data: existing, error: selectErr } = await client.from('gym_settings').select('id').limit(1);
+  // Check if existing row exists and determine actual table schema columns
+  const { data: existing, error: selectErr } = await client.from('gym_settings').select('*').limit(1);
 
   if (selectErr && isTableMissingError(selectErr)) {
     setSupabaseSchemaPending(true);
     throw new Error(formatSupabaseError(selectErr, 'Gym Settings table does not exist in Supabase'));
   }
 
+  const existingRow = existing && existing.length > 0 ? existing[0] : null;
+  const existingKeys = existingRow ? new Set(Object.keys(existingRow)) : null;
+
+  // Cache table columns
+  if (existingKeys) {
+    tableColumnsCache['gym_settings'] = existingKeys;
+  }
+
+  // Populate base fields strictly based on actual columns in table
+  const toSave: Record<string, any> = {
+    updated_at: now,
+  };
+
+  if (!existingKeys || existingKeys.has('gym_name')) {
+    toSave.gym_name = (settings.gym_name || 'MS Fitness').trim();
+  }
+  if (!existingKeys || existingKeys.has('tagline')) {
+    toSave.tagline = (settings.tagline || '').trim();
+  }
+  if (!existingKeys || existingKeys.has('address')) {
+    toSave.address = (settings.address || '').trim();
+  }
+  if (settings.logo_url !== undefined && (!existingKeys || existingKeys.has('logo_url'))) {
+    toSave.logo_url = (settings.logo_url || '').trim();
+  }
+
+  // Handle email mapping: if table has contact_email, use contact_email; if table has email, use email.
+  // NEVER send 'email' if the table only has 'contact_email'!
+  if (emailVal) {
+    if (existingKeys) {
+      if (existingKeys.has('contact_email')) toSave.contact_email = emailVal;
+      if (existingKeys.has('email')) toSave.email = emailVal;
+    } else {
+      // Fall back to default table schema which uses contact_email
+      toSave.contact_email = emailVal;
+    }
+  }
+
+  // Handle phone mapping: if table has contact_number, use contact_number; if table has phone, use phone.
+  // NEVER send 'phone' if the table only has 'contact_number'!
+  if (phoneVal) {
+    if (existingKeys) {
+      if (existingKeys.has('contact_number')) toSave.contact_number = phoneVal;
+      if (existingKeys.has('phone')) toSave.phone = phoneVal;
+    } else {
+      // Fall back to default table schema which uses contact_number
+      toSave.contact_number = phoneVal;
+    }
+  }
+
+  // Handle upi_id: only set if column exists or unknown
+  if (settings.upi_id !== undefined && (!existingKeys || existingKeys.has('upi_id'))) {
+    toSave.upi_id = (settings.upi_id || '').trim();
+  }
+
+  console.log('Updating gym settings in Supabase table "gym_settings":', toSave);
+
   let resultRow: any = null;
   let currentSave: Record<string, any> = { ...toSave };
   let lastError: any = null;
 
   for (let attempt = 0; attempt < 6; attempt++) {
-    if (existing && existing.length > 0) {
+    if (existingRow && existingRow.id) {
       const { data, error } = await client
         .from('gym_settings')
         .update(currentSave)
-        .eq('id', existing[0].id)
+        .eq('id', existingRow.id)
         .select()
         .single();
 
@@ -935,6 +1068,7 @@ export async function updateGymSettings(settings: Partial<GymSettings>, adminEma
       if (missingCol && currentSave[missingCol] !== undefined) {
         console.warn(`[updateGymSettings] Column "${missingCol}" is missing from "gym_settings". Auto-retrying without it...`);
         delete currentSave[missingCol];
+        if (existingKeys) existingKeys.delete(missingCol);
         continue;
       }
     }

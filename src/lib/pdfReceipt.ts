@@ -1,12 +1,12 @@
 import jsPDF from 'jspdf';
 import { Payment, Member, GymSettings } from '../types';
 
-export function generateReceiptPdf(
+export function buildReceiptPdfDocument(
   payment: Payment,
   member: Member | undefined,
   settings: GymSettings,
   adminEmail: string
-) {
+): jsPDF {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -76,52 +76,87 @@ export function generateReceiptPdf(
   }), pageWidth - 20, 67, { align: 'right' });
 
   // Member Information Section
+  const effectiveMember = member || {
+    id: payment.member_id,
+    member_id: payment.member_code || 'N/A',
+    name: payment.member_name || 'Member',
+    mobile: payment.member_mobile || 'N/A',
+    email: (payment as any).member_email || '',
+    gender: 'other' as const,
+    join_date: (payment as any).join_date || payment.payment_date,
+    plan_amount: Number(payment.total_due || payment.amount),
+    discount: Number(payment.discount || 0),
+    membership_start: (payment as any).membership_start || payment.payment_date,
+    membership_expiry: (payment as any).membership_expiry || '',
+    status: 'active' as const,
+  };
+
+  const isUpi = payment.payment_method === 'UPI';
+  const hasUpiTxn = isUpi && !!payment.transaction_number;
+  const boxHeight = hasUpiTxn ? 48 : 42;
+
   doc.setDrawColor(220, 220, 220);
   doc.setFillColor(252, 252, 252);
-  doc.roundedRect(15, 78, pageWidth - 30, 36, 3, 3, 'FD');
+  doc.roundedRect(15, 78, pageWidth - 30, boxHeight, 3, 3, 'FD');
 
   doc.setFontSize(10);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(primaryRed[0], primaryRed[1], primaryRed[2]);
-  doc.text('MEMBER DETAILS', 22, 86);
+  doc.text('MEMBER DETAILS', 22, 85);
 
   // Member details columns
-  doc.setFontSize(9);
+  doc.setFontSize(8.5);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(grayText[0], grayText[1], grayText[2]);
-  doc.text('Member Name:', 22, 94);
-  doc.text('Member ID:', 22, 101);
-  doc.text('Mobile Number:', 22, 108);
+  doc.text('Member Name:', 22, 92);
+  doc.text('Member ID:', 22, 98);
+  doc.text('Mobile Number:', 22, 104);
+  doc.text('Payment Mode:', 22, 110);
+  if (hasUpiTxn) {
+    doc.text('UPI Txn No:', 22, 116);
+  }
 
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(17, 17, 17);
-  doc.text(member?.name || payment.member_name || 'Member', 55, 94);
-  doc.text(member?.member_id || payment.member_code || 'N/A', 55, 101);
-  doc.text(member?.mobile || payment.member_mobile || 'N/A', 55, 108);
+  doc.text(effectiveMember.name || payment.member_name || 'Member', 55, 92);
+  doc.text(effectiveMember.member_id || payment.member_code || 'N/A', 55, 98);
+  doc.text(effectiveMember.mobile || payment.member_mobile || 'N/A', 55, 104);
+
+  // Payment method badge
+  doc.setTextColor(isUpi ? 37 : 22, isUpi ? 99 : 101, isUpi ? 235 : 52);
+  doc.text(payment.payment_method.toUpperCase(), 55, 110);
+
+  if (hasUpiTxn) {
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(primaryRed[0], primaryRed[1], primaryRed[2]);
+    doc.text(String(payment.transaction_number), 55, 116);
+  }
 
   // Right side of member box
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(grayText[0], grayText[1], grayText[2]);
-  doc.text('Plan Enrolled:', pageWidth / 2 + 10, 94);
-  doc.text('Membership Expiry:', pageWidth / 2 + 10, 101);
-  doc.text('Payment Mode:', pageWidth / 2 + 10, 108);
+  doc.text('Plan Enrolled:', pageWidth / 2 + 10, 92);
+  doc.text('Membership Start:', pageWidth / 2 + 10, 98);
+  doc.text('Membership Expiry:', pageWidth / 2 + 10, 104);
 
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(17, 17, 17);
-  doc.text(payment.plan_name || 'Gym Membership', pageWidth / 2 + 48, 94);
-  doc.text(member?.membership_expiry ? new Date(member.membership_expiry).toLocaleDateString('en-IN', {
+  doc.text(payment.plan_name || 'Gym Membership', pageWidth / 2 + 48, 92);
+  const startDateStr = effectiveMember.membership_start || (payment as any).membership_start || payment.payment_date;
+  const expiryDateStr = effectiveMember.membership_expiry || (payment as any).membership_expiry;
+  doc.text(startDateStr ? new Date(startDateStr).toLocaleDateString('en-IN', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
-  }) : 'Active', pageWidth / 2 + 48, 101);
-
-  // Payment method badge
-  const isUpi = payment.payment_method === 'UPI';
-  doc.setTextColor(isUpi ? 37 : 22, isUpi ? 99 : 101, isUpi ? 235 : 52);
-  doc.text(payment.payment_method.toUpperCase(), pageWidth / 2 + 48, 108);
+  }) : 'N/A', pageWidth / 2 + 48, 98);
+  doc.text(expiryDateStr ? new Date(expiryDateStr).toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }) : 'Active', pageWidth / 2 + 48, 104);
 
   // Financial Breakdown Table
-  const tableTop = 125;
+  const tableTop = hasUpiTxn ? 133 : 127;
   doc.setFillColor(darkBg[0], darkBg[1], darkBg[2]);
   doc.rect(15, tableTop, pageWidth - 30, 9, 'F');
 
@@ -237,9 +272,31 @@ export function generateReceiptPdf(
   doc.setTextColor(255, 255, 255);
   doc.text('Thank you for choosing MS Fitness! Stronger Body, Stronger You.', pageWidth / 2, 292, { align: 'center' });
 
-  // Save the PDF
+  return doc;
+}
+
+export function generateReceiptPdf(
+  payment: Payment,
+  member: Member | undefined,
+  settings: GymSettings,
+  adminEmail: string
+) {
+  const doc = buildReceiptPdfDocument(payment, member, settings, adminEmail);
   const filename = `${payment.receipt_number || payment.payment_id || 'Receipt'}_${member?.name?.replace(/\s+/g, '_') || 'Member'}.pdf`;
   doc.save(filename);
+}
+
+export function getReceiptPdfBase64(
+  payment: Payment,
+  member: Member | undefined,
+  settings: GymSettings,
+  adminEmail: string
+): { base64: string; filename: string } {
+  const doc = buildReceiptPdfDocument(payment, member, settings, adminEmail);
+  const filename = `${payment.receipt_number || payment.payment_id || 'Receipt'}_${member?.name?.replace(/\s+/g, '_') || 'Member'}.pdf`;
+  const dataUri = doc.output('datauristring');
+  const base64 = dataUri.includes(',') ? dataUri.split(',')[1] : dataUri;
+  return { base64, filename };
 }
 
 export function exportReportToPdf(
