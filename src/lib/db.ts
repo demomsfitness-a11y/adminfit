@@ -9,7 +9,19 @@ import {
   DashboardStats,
   Appointment,
   AppointmentStatus,
+  AdminAccount,
 } from '../types';
+
+export {
+  fetchAdmins,
+  getAdmins,
+  fetchAdminByEmail,
+  createAdmin,
+  updateAdmin,
+  deleteAdmin,
+  updateAdminLastLogin,
+  generateNextAdminId,
+} from './adminDb';
 
 export const DEFAULT_PLANS: Omit<MembershipPlan, 'id'>[] = [
   {
@@ -147,20 +159,127 @@ export const DEFAULT_SAMPLE_PAYMENTS: Payment[] = [];
 
 // ---------------- ACTIVITY LOGS ----------------
 
-export async function logActivity(action: string, description: string, adminEmail: string) {
-  const client = getSupabase();
-  const logItem: Omit<ActivityLog, 'id'> = {
+const LOCAL_LOGS_STORAGE_KEY = 'msf_gym_activity_logs_v1';
+
+function getStoredLocalLogs(): ActivityLog[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_LOGS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    // Ignore storage parse issues
+  }
+  return [];
+}
+
+function saveStoredLocalLogs(logs: ActivityLog[]) {
+  try {
+    localStorage.setItem(LOCAL_LOGS_STORAGE_KEY, JSON.stringify(logs.slice(0, 300)));
+  } catch (e) {
+    // Ignore storage write issues
+  }
+}
+
+export async function logActivity(
+  action: string,
+  description: string,
+  admin: string | AdminAccount | { email: string; full_name?: string; admin_id?: string; role?: string },
+  options?: {
+    module?: string;
+    target_type?: string;
+    target_id?: string;
+    status?: 'success' | 'failed' | 'warning';
+    ip_address?: string;
+  }
+) {
+  let email = '';
+  let adminId = '';
+  let adminName = '';
+  let role = 'admin';
+
+  if (typeof admin === 'string') {
+    email = admin.trim();
+    adminName = email.split('@')[0];
+  } else if (admin && typeof admin === 'object') {
+    email = admin.email || '';
+    adminId = admin.admin_id || '';
+    adminName = admin.full_name || (email ? email.split('@')[0] : 'Admin');
+    role = admin.role || 'admin';
+  }
+
+  // Derive module if not explicitly provided
+  let moduleName = options?.module;
+  if (!moduleName) {
+    const act = action.toLowerCase();
+    if (act.includes('member')) moduleName = 'Members';
+    else if (act.includes('payment') || act.includes('fee')) moduleName = 'Payments';
+    else if (act.includes('receipt')) moduleName = 'Receipts';
+    else if (act.includes('plan')) moduleName = 'Plans';
+    else if (act.includes('admin') || act.includes('role') || act.includes('permission')) moduleName = 'Admins';
+    else if (act.includes('appointment')) moduleName = 'Appointments';
+    else if (act.includes('login') || act.includes('logout') || act.includes('auth')) moduleName = 'Auth';
+    else if (act.includes('setting')) moduleName = 'Settings';
+    else moduleName = 'General';
+  }
+
+  const timestamp = new Date().toISOString();
+  const logItem: ActivityLog = {
+    id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    admin_id: adminId,
+    admin_name: adminName,
+    admin_email: email,
+    role,
     action,
+    module: moduleName,
     description,
-    timestamp: new Date().toISOString(),
-    admin_email: adminEmail || 'admin@msfitness.com',
+    target_type: options?.target_type || '',
+    target_id: options?.target_id || '',
+    ip_address: options?.ip_address || '',
+    status: options?.status || 'success',
+    timestamp,
   };
 
+  // 1. Prepend to local storage immediately
+  const localList = getStoredLocalLogs();
+  localList.unshift(logItem);
+  saveStoredLocalLogs(localList);
+
+  // 2. Insert to Supabase with schema resilience
+  const client = getSupabase();
   if (client && isSupabaseConfigured()) {
     try {
-      const { error } = await client.from('activity_logs').insert([logItem]);
+      // First attempt full rich insert
+      const richPayload: any = {
+        action: logItem.action,
+        description: logItem.description,
+        timestamp: logItem.timestamp,
+        admin_email: logItem.admin_email,
+        admin_id: logItem.admin_id,
+        admin_name: logItem.admin_name,
+        role: logItem.role,
+        module: logItem.module,
+        target_type: logItem.target_type,
+        target_id: logItem.target_id,
+        ip_address: logItem.ip_address,
+        status: logItem.status,
+      };
+
+      const { error } = await client.from('activity_logs').insert([richPayload]);
       if (error) {
-        console.warn('Supabase activity log notice:', error.message);
+        // If columns don't exist in Supabase yet, fallback gracefully to original 4 columns
+        if (extractMissingColumn(error) || error.code === 'PGRST204') {
+          const minimalPayload = {
+            action: logItem.action,
+            description: logItem.description,
+            timestamp: logItem.timestamp,
+            admin_email: logItem.admin_email,
+          };
+          await client.from('activity_logs').insert([minimalPayload]);
+        } else {
+          console.warn('Supabase activity log notice:', error.message);
+        }
       }
     } catch (e) {
       console.warn('Could not insert activity log to Supabase:', e);
@@ -176,10 +295,17 @@ export async function fetchActivityLogs(): Promise<ActivityLog[]> {
         .from('activity_logs')
         .select('*')
         .order('timestamp', { ascending: false })
-        .limit(100);
+        .limit(200);
 
-      if (!error && data) {
-        return data as ActivityLog[];
+      if (!error && data && data.length > 0) {
+        // Merge with any recent local logs
+        const local = getStoredLocalLogs();
+        const existingIds = new Set(data.map((d: any) => d.id));
+        const missingLocal = local.filter((l) => !existingIds.has(l.id));
+        const combined = [...missingLocal, ...data].sort(
+          (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        );
+        return combined as ActivityLog[];
       }
       if (error) {
         console.warn('Supabase fetch logs notice:', error.message);
@@ -188,7 +314,7 @@ export async function fetchActivityLogs(): Promise<ActivityLog[]> {
       console.warn('Error fetching logs from Supabase:', err);
     }
   }
-  return [];
+  return getStoredLocalLogs();
 }
 
 // ---------------- MEMBERS ----------------
@@ -685,10 +811,11 @@ export async function fetchPayments(): Promise<Payment[]> {
   setSupabaseSchemaPending(false);
 
   const mapped = (data || []).map((p: any) => {
-    const txnNum = p.transaction_number || extractUpiTransactionNumber(p.notes);
+    const txnNum = p.upi_transaction_number || p.transaction_number || extractUpiTransactionNumber(p.notes);
     return {
       ...p,
       transaction_number: txnNum,
+      upi_transaction_number: txnNum,
       member_name: p.members?.name || 'Member',
       member_code: p.members?.member_id || '',
       member_mobile: p.members?.mobile || '',
@@ -758,6 +885,7 @@ export async function createPayment(
     remaining_balance: number;
     payment_method: 'Cash' | 'UPI';
     transaction_number?: string;
+    upi_transaction_number?: string;
     payment_date: string;
     notes?: string;
     plan_name?: string;
@@ -781,7 +909,8 @@ export async function createPayment(
   const now = new Date().toISOString();
 
   const isUpi = paymentData.payment_method === 'UPI';
-  const cleanTxn = isUpi && paymentData.transaction_number ? paymentData.transaction_number.trim() : undefined;
+  const rawTxn = paymentData.upi_transaction_number || paymentData.transaction_number;
+  const cleanTxn = isUpi && rawTxn ? rawTxn.trim() : undefined;
 
   let notesVal = (paymentData.notes || '').trim();
   if (cleanTxn) {
@@ -807,8 +936,11 @@ export async function createPayment(
     created_at: now,
   };
 
-  if (cleanTxn) {
+  if (isUpi && cleanTxn) {
+    record.upi_transaction_number = cleanTxn;
     record.transaction_number = cleanTxn;
+  } else {
+    record.upi_transaction_number = null;
   }
 
   console.log('Inserting payment into Supabase table "payments":', record);
@@ -1381,3 +1513,4 @@ export async function syncAppointmentsToSupabase(): Promise<{ syncedCount: numbe
   }
   return { syncedCount: 0 };
 }
+

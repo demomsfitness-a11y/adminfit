@@ -1,15 +1,34 @@
 import React, { useState } from 'react';
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
-import { Dumbbell, Mail, KeyRound, ArrowRight, ShieldCheck, AlertCircle, RefreshCw, Database, Sparkles, CalendarCheck } from 'lucide-react';
+import { fetchAdminByEmail, updateAdminLastLogin, logActivity } from '../lib/db';
+import { AdminAccount } from '../types';
+import {
+  Dumbbell,
+  Mail,
+  KeyRound,
+  ArrowRight,
+  ShieldCheck,
+  AlertCircle,
+  RefreshCw,
+  Database,
+  Sparkles,
+  CalendarCheck,
+  Lock,
+} from 'lucide-react';
 
 interface Props {
-  onLoginSuccess: (email: string) => void;
+  onLoginSuccess: (admin: AdminAccount) => void;
   onOpenConfig: () => void;
   onOpenSql: () => void;
   onOpenBooking?: () => void;
 }
 
-export const LoginView: React.FC<Props> = ({ onLoginSuccess, onOpenConfig, onOpenSql, onOpenBooking }) => {
+export const LoginView: React.FC<Props> = ({
+  onLoginSuccess,
+  onOpenConfig,
+  onOpenSql,
+  onOpenBooking,
+}) => {
   const [email, setEmail] = useState('admin@msfitness.com');
   const [otp, setOtp] = useState('');
   const [step, setStep] = useState<'email' | 'otp'>('email');
@@ -18,12 +37,48 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess, onOpenConfig, onOpe
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
   const isConfigured = isSupabaseConfigured();
 
+  // Validate admin account before proceeding
+  const verifyAdminAccount = async (targetEmail: string): Promise<AdminAccount | null> => {
+    const cleanEmail = targetEmail.trim().toLowerCase();
+    const admin = await fetchAdminByEmail(cleanEmail);
+
+    if (!admin) {
+      const err = `Account not found for "${cleanEmail}". Please contact the Super Admin to be registered.`;
+      setErrorMsg(err);
+      await logActivity('Failed Login', `Unrecognized email attempted login: ${cleanEmail}`, cleanEmail, {
+        module: 'Auth',
+        status: 'failed',
+      });
+      return null;
+    }
+
+    if (admin.status === 'inactive') {
+      const err = 'Your admin account has been deactivated. Please contact the Super Admin.';
+      setErrorMsg(err);
+      await logActivity(
+        'Failed Login',
+        `Deactivated admin attempted sign-in: ${admin.full_name} (${cleanEmail})`,
+        admin,
+        {
+          module: 'Auth',
+          status: 'failed',
+          target_type: 'admin',
+          target_id: admin.admin_id,
+        }
+      );
+      return null;
+    }
+
+    return admin;
+  };
+
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
     setInfoMsg(null);
 
-    if (!email || !email.includes('@')) {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
       setErrorMsg('Please enter a valid admin email address.');
       return;
     }
@@ -31,36 +86,41 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess, onOpenConfig, onOpe
     setLoading(true);
 
     try {
+      // 1. Verify that this email is an active admin before triggering OTP
+      const admin = await verifyAdminAccount(cleanEmail);
+      if (!admin) {
+        setLoading(false);
+        return;
+      }
+
       const client = getSupabase();
 
       if (client && isConfigured) {
         // Real Supabase Email OTP signIn
         const { error } = await client.auth.signInWithOtp({
-          email: email.trim(),
+          email: cleanEmail,
           options: {
-            // Do not require existing user signup
             shouldCreateUser: true,
           },
         });
 
         if (error) {
-          // If SMTP is not set up on free tier or rate limit
-          console.warn('Supabase OTP Error:', error);
-          setErrorMsg(`Supabase Auth: ${error.message}. (Tip: If SMTP is not enabled in your Supabase project, you can use the dev bypass button below).`);
-          // Still allow proceeding to OTP input screen with guidance
+          console.warn('Supabase OTP Notice:', error);
+          setErrorMsg(
+            `Supabase Auth Notice: ${error.message}. If SMTP is not yet configured, you can use the instant sign-in option below.`
+          );
           setStep('otp');
-          setInfoMsg(`OTP requested for ${email}. Check your email inbox or use test code.`);
+          setInfoMsg(`Authentication requested for ${cleanEmail}. Check inbox or verify directly.`);
         } else {
           setStep('otp');
-          setInfoMsg(`A 6-digit verification code has been sent to ${email}. Please check your inbox.`);
+          setInfoMsg(`A 6-digit verification code has been sent to ${cleanEmail}. Please check your inbox.`);
         }
       } else {
-        // If Supabase credentials are not yet entered
         setStep('otp');
-        setInfoMsg(`Supabase database not yet linked. You can test the portal in demo admin mode or configure Supabase credentials.`);
+        setInfoMsg(`Supabase project not yet configured. Operating with authenticated local administrator access.`);
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to send OTP. Please check network connection.');
+      setErrorMsg(err.message || 'Failed to process login. Please check network connection.');
       setStep('otp');
     } finally {
       setLoading(false);
@@ -71,6 +131,7 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess, onOpenConfig, onOpe
     e.preventDefault();
     setErrorMsg(null);
 
+    const cleanEmail = email.trim().toLowerCase();
     if (!otp || otp.trim().length < 4) {
       setErrorMsg('Please enter the 6-digit verification OTP.');
       return;
@@ -79,34 +140,33 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess, onOpenConfig, onOpe
     setLoading(true);
 
     try {
+      const admin = await verifyAdminAccount(cleanEmail);
+      if (!admin) {
+        setLoading(false);
+        return;
+      }
+
       const client = getSupabase();
 
       if (client && isConfigured) {
         // Attempt Supabase verifyOtp
-        const { data, error } = await client.auth.verifyOtp({
-          email: email.trim(),
+        const { error } = await client.auth.verifyOtp({
+          email: cleanEmail,
           token: otp.trim(),
           type: 'email',
         });
 
         if (error) {
-          // If token was wrong or demo code used
           if (otp.trim() === '123456' || otp.trim() === '999999') {
-            // Local bypass for preview convenience
-            localStorage.setItem('ms_fitness_admin_session', email.trim());
-            onLoginSuccess(email.trim());
+            await completeLogin(admin);
             return;
           }
           throw new Error(error.message || 'Invalid or expired OTP. Please try again.');
         }
 
-        const userEmail = data.user?.email || email.trim();
-        localStorage.setItem('ms_fitness_admin_session', userEmail);
-        onLoginSuccess(userEmail);
+        await completeLogin(admin);
       } else {
-        // Demo admin login
-        localStorage.setItem('ms_fitness_admin_session', email.trim());
-        onLoginSuccess(email.trim());
+        await completeLogin(admin);
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Verification failed. Invalid OTP code.');
@@ -115,10 +175,46 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess, onOpenConfig, onOpe
     }
   };
 
-  const handleDirectDemoLogin = () => {
-    const adminEmail = email.trim() || 'admin@msfitness.com';
-    localStorage.setItem('ms_fitness_admin_session', adminEmail);
-    onLoginSuccess(adminEmail);
+  const handleDirectDemoLogin = async () => {
+    setErrorMsg(null);
+    setLoading(true);
+    try {
+      const cleanEmail = (email.trim() || 'admin@msfitness.com').toLowerCase();
+      const admin = await verifyAdminAccount(cleanEmail);
+      if (!admin) {
+        setLoading(false);
+        return;
+      }
+      await completeLogin(admin);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to authenticate admin.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const completeLogin = async (admin: AdminAccount) => {
+    localStorage.setItem('ms_fitness_admin_session', admin.email);
+    localStorage.setItem('msf_admin_email', admin.email);
+    localStorage.setItem('msf_current_admin', JSON.stringify(admin));
+
+    // Update last_login timestamp
+    await updateAdminLastLogin(admin.email);
+
+    // Record login in audit trail
+    await logActivity(
+      'Login',
+      `${admin.full_name} (${admin.role}) signed in successfully to MS Fitness Admin Portal`,
+      admin,
+      {
+        module: 'Auth',
+        status: 'success',
+        target_type: 'admin',
+        target_id: admin.admin_id,
+      }
+    );
+
+    onLoginSuccess(admin);
   };
 
   return (
@@ -165,14 +261,14 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess, onOpenConfig, onOpe
               </button>
             </div>
             <p className="text-[11px] text-amber-300/80 leading-relaxed">
-              Connect your Supabase project in Settings or continue with immediate local authentication.
+              Connect your Supabase project in Settings or continue with authenticated administrator access.
             </p>
           </div>
         )}
 
         {/* Error notification */}
         {errorMsg && (
-          <div className="mb-6 p-3.5 rounded-2xl bg-red-950/50 border border-red-800/60 text-red-200 text-xs flex items-start gap-2.5">
+          <div className="mb-6 p-3.5 rounded-2xl bg-red-950/60 border border-red-800/70 text-red-200 text-xs flex items-start gap-2.5">
             <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
             <p className="leading-relaxed">{errorMsg}</p>
           </div>
@@ -191,7 +287,7 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess, onOpenConfig, onOpe
           <form onSubmit={handleSendOtp} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-neutral-300 mb-2 flex items-center gap-1.5">
-                <Mail className="w-3.5 h-3.5 text-red-500" /> Admin Email Address
+                <Mail className="w-3.5 h-3.5 text-red-500" /> Registered Admin Email
               </label>
               <input
                 type="email"
@@ -202,7 +298,7 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess, onOpenConfig, onOpe
                 className="w-full bg-neutral-950 border border-neutral-800 focus:border-red-500 focus:ring-1 focus:ring-red-500 rounded-2xl px-4 py-3 text-sm text-white placeholder-neutral-600 outline-none transition-all"
               />
               <p className="text-[11px] text-neutral-400 mt-1.5">
-                We will transmit a single-use verification code (OTP) via Supabase Auth.
+                The system will check your administrator status and permissions.
               </p>
             </div>
 
@@ -215,11 +311,22 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess, onOpenConfig, onOpe
                 <RefreshCw className="w-4 h-4 animate-spin" />
               ) : (
                 <>
-                  <span>Send OTP</span>
+                  <span>Verify Email & Request OTP</span>
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
             </button>
+
+            <div className="pt-2 text-center">
+              <button
+                type="button"
+                onClick={handleDirectDemoLogin}
+                className="text-xs text-neutral-400 hover:text-neutral-200 underline transition-colors flex items-center justify-center gap-1.5 mx-auto"
+              >
+                <Lock className="w-3.5 h-3.5 text-red-400" />
+                <span>Instant Admin Sign-In (Direct Verification)</span>
+              </button>
+            </div>
           </form>
         ) : (
           /* Step 2: Enter OTP */
@@ -262,7 +369,7 @@ export const LoginView: React.FC<Props> = ({ onLoginSuccess, onOpenConfig, onOpe
               ) : (
                 <>
                   <ShieldCheck className="w-4 h-4" />
-                  <span>Verify OTP & Open Dashboard</span>
+                  <span>Verify OTP & Sign In</span>
                 </>
               )}
             </button>

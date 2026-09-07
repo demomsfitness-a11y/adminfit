@@ -13,8 +13,15 @@ import {
   X,
   LogOut,
   ChevronRight,
-  Database
+  Database,
+  ShieldCheck,
+  ShieldAlert,
+  Crown,
+  UserCog,
+  Key,
 } from 'lucide-react';
+import { AdminAccount } from '../types';
+import { hasPermission, isSuperAdmin, getRoleLabel } from '../lib/permissions';
 
 export type TabType =
   | 'dashboard'
@@ -25,12 +32,14 @@ export type TabType =
   | 'expiry'
   | 'reports'
   | 'activity'
+  | 'admins'
   | 'settings';
 
 interface Props {
   activeTab: TabType;
   setActiveTab: (tab: TabType) => void;
   adminEmail: string;
+  currentAdmin?: AdminAccount;
   onLogout: () => void;
   isMobileOpen: boolean;
   setIsMobileOpen: (open: boolean) => void;
@@ -41,27 +50,56 @@ export const Sidebar: React.FC<Props> = ({
   activeTab,
   setActiveTab,
   adminEmail,
+  currentAdmin,
   onLogout,
   isMobileOpen,
   setIsMobileOpen,
   onOpenSql,
 }) => {
-  const menuItems: { id: TabType; label: string; icon: React.FC<{ className?: string }> }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'appointments', label: 'Appointments', icon: CalendarCheck },
-    { id: 'members', label: 'Members', icon: Users },
-    { id: 'plans', label: 'Membership Plans', icon: Layers },
-    { id: 'payments', label: 'Payments', icon: CreditCard },
-    { id: 'expiry', label: 'Expiry Management', icon: ClockAlert },
-    { id: 'reports', label: 'Reports', icon: BarChart3 },
-    { id: 'activity', label: 'Activity Logs', icon: History },
-    { id: 'settings', label: 'Settings', icon: Settings },
+  const isSuper = isSuperAdmin(currentAdmin);
+
+  const menuItems: {
+    id: TabType;
+    label: string;
+    icon: React.FC<{ className?: string }>;
+    requiredPermission?: any;
+    superAdminOnly?: boolean;
+    badge?: string;
+  }[] = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, requiredPermission: 'dashboard.view' },
+    { id: 'appointments', label: 'Appointments', icon: CalendarCheck, requiredPermission: 'appointments.view' },
+    { id: 'members', label: 'Members', icon: Users, requiredPermission: 'members.view' },
+    { id: 'plans', label: 'Membership Plans', icon: Layers, requiredPermission: 'plans.view' },
+    { id: 'payments', label: 'Payments', icon: CreditCard, requiredPermission: 'payments.view' },
+    { id: 'expiry', label: 'Expiry Management', icon: ClockAlert, requiredPermission: 'members.view' },
+    { id: 'reports', label: 'Reports', icon: BarChart3, requiredPermission: 'dashboard.view' },
+    { id: 'activity', label: 'Activity Logs', icon: History, requiredPermission: 'activity_logs.view' },
+    {
+      id: 'admins',
+      label: 'Admin Management',
+      icon: UserCog,
+      superAdminOnly: true,
+      badge: 'Super Admin',
+    },
+    { id: 'settings', label: 'Settings', icon: Settings, requiredPermission: 'settings.view' },
   ];
 
   const handleSelect = (tab: TabType) => {
     setActiveTab(tab);
     setIsMobileOpen(false);
   };
+
+  const filteredMenuItems = menuItems.filter((item) => {
+    if (item.superAdminOnly) {
+      return isSuper || hasPermission(currentAdmin, 'admins.view');
+    }
+    if (item.requiredPermission) {
+      return hasPermission(currentAdmin, item.requiredPermission);
+    }
+    return true;
+  });
+
+  const roleLabel = currentAdmin ? getRoleLabel(currentAdmin.role) : 'Administrator';
 
   return (
     <>
@@ -110,11 +148,16 @@ export const Sidebar: React.FC<Props> = ({
 
         {/* Navigation Menu */}
         <div className="flex-1 px-4 py-6 overflow-y-auto space-y-1.5">
-          <div className="px-3 pb-2 text-[10px] font-bold text-neutral-400 uppercase tracking-widest">
-            Main Management
+          <div className="px-3 pb-2 text-[10px] font-bold text-neutral-400 uppercase tracking-widest flex items-center justify-between">
+            <span>Main Management</span>
+            {isSuper && (
+              <span className="text-[9px] text-red-400 font-mono font-bold flex items-center gap-1">
+                <Crown className="w-2.5 h-2.5" /> ROOT
+              </span>
+            )}
           </div>
 
-          {menuItems.map((item) => {
+          {filteredMenuItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
 
@@ -136,7 +179,14 @@ export const Sidebar: React.FC<Props> = ({
                   />
                   <span>{item.label}</span>
                 </div>
-                {isActive && <ChevronRight className="w-4 h-4 text-white/80" />}
+                <div className="flex items-center gap-1.5">
+                  {item.badge && !isActive && (
+                    <span className="px-1.5 py-0.5 rounded bg-red-950/60 border border-red-800/60 text-red-400 text-[9px] font-bold tracking-wider uppercase">
+                      {item.badge}
+                    </span>
+                  )}
+                  {isActive && <ChevronRight className="w-4 h-4 text-white/80" />}
+                </div>
               </button>
             );
           })}
@@ -154,21 +204,43 @@ export const Sidebar: React.FC<Props> = ({
           </button>
         </div>
 
-        {/* Admin Footer */}
+        {/* Authenticated Admin Card Footer */}
         <div className="p-4 border-t border-neutral-800/80 bg-neutral-950/90">
-          <div className="bg-neutral-900/90 border border-neutral-800/90 rounded-2xl p-3 flex items-center justify-between">
-            <div className="min-w-0 pr-2">
-              <span className="block text-xs font-bold text-white truncate">
-                {adminEmail}
-              </span>
-              <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-medium">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                Admin Authenticated
-              </span>
+          <div className="bg-neutral-900/90 border border-neutral-800/90 rounded-2xl p-3 flex items-center justify-between gap-2">
+            <div className="min-w-0 pr-1 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="block text-xs font-bold text-white truncate">
+                  {currentAdmin?.full_name || adminEmail.split('@')[0]}
+                </span>
+                {currentAdmin?.admin_id && (
+                  <span className="px-1.5 py-0.2 rounded bg-neutral-950 text-red-400 text-[9px] font-mono font-bold">
+                    {currentAdmin.admin_id}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span
+                  className={`text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 ${
+                    currentAdmin?.role === 'super_admin'
+                      ? 'text-red-400'
+                      : currentAdmin?.role === 'admin'
+                      ? 'text-blue-400'
+                      : 'text-purple-400'
+                  }`}
+                >
+                  {currentAdmin?.role === 'super_admin' && <Crown className="w-2.5 h-2.5" />}
+                  {roleLabel}
+                </span>
+                <span className="text-[10px] text-neutral-600">•</span>
+                <span className="text-[10px] text-emerald-400 flex items-center gap-0.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  Active
+                </span>
+              </div>
             </div>
             <button
               onClick={onLogout}
-              title="Logout"
+              title="Logout session"
               className="p-2 rounded-xl text-neutral-400 hover:text-red-400 hover:bg-neutral-800 transition-colors shrink-0"
             >
               <LogOut className="w-4 h-4" />

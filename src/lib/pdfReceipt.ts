@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf';
 import { Payment, Member, GymSettings } from '../types';
+import { extractUpiTransactionNumber } from './planUtils';
 
 export function buildReceiptPdfDocument(
   payment: Payment,
@@ -92,7 +93,11 @@ export function buildReceiptPdfDocument(
   };
 
   const isUpi = payment.payment_method === 'UPI';
-  const hasUpiTxn = isUpi && !!payment.transaction_number;
+  const txnNum =
+    payment.upi_transaction_number ||
+    payment.transaction_number ||
+    extractUpiTransactionNumber(payment.notes);
+  const hasUpiTxn = isUpi && !!txnNum;
   const boxHeight = hasUpiTxn ? 48 : 42;
 
   doc.setDrawColor(220, 220, 220);
@@ -129,7 +134,7 @@ export function buildReceiptPdfDocument(
   if (hasUpiTxn) {
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(primaryRed[0], primaryRed[1], primaryRed[2]);
-    doc.text(String(payment.transaction_number), 55, 116);
+    doc.text(String(txnNum), 55, 116);
   }
 
   // Right side of member box

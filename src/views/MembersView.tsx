@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Member, MembershipPlan, Payment } from '../types';
+import { Member, MembershipPlan, Payment, AdminAccount } from '../types';
+import { hasPermission } from '../lib/permissions';
 import {
   Search,
   Plus,
@@ -15,7 +16,8 @@ import {
   AlertTriangle,
   Receipt,
   Clock,
-  Sparkles
+  Sparkles,
+  Lock
 } from 'lucide-react';
 
 interface Props {
@@ -23,6 +25,7 @@ interface Props {
   plans: MembershipPlan[];
   payments: Payment[];
   adminEmail: string;
+  currentAdmin?: AdminAccount;
   onAddMember: (memberData: Omit<Member, 'id'>) => Promise<void>;
   onUpdateMember: (id: string, updates: Partial<Member>) => Promise<void>;
   onDeleteMember: (id: string, name: string, code: string) => Promise<void>;
@@ -31,12 +34,15 @@ interface Props {
   initialOpenAdd?: boolean;
   initialMemberData?: Partial<Member> | null;
   onClearInitialMemberData?: () => void;
+  onOpenMemberProfile?: (member: Member) => void;
 }
 
 export const MembersView: React.FC<Props> = ({
   members,
   plans,
   payments,
+  adminEmail,
+  currentAdmin,
   onAddMember,
   onUpdateMember,
   onDeleteMember,
@@ -45,7 +51,13 @@ export const MembersView: React.FC<Props> = ({
   initialOpenAdd = false,
   initialMemberData,
   onClearInitialMemberData,
+  onOpenMemberProfile,
 }) => {
+  const canCreate = !currentAdmin || hasPermission(currentAdmin, 'members.create');
+  const canEdit = !currentAdmin || hasPermission(currentAdmin, 'members.edit');
+  const canDelete = !currentAdmin || hasPermission(currentAdmin, 'members.delete');
+  const canRecordPayment = !currentAdmin || hasPermission(currentAdmin, 'payments.create');
+
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'expired'>('all');
 
@@ -329,13 +341,23 @@ export const MembersView: React.FC<Props> = ({
             </button>
           </div>
 
-          <button
-            onClick={openAddModal}
-            className="px-4 py-2.5 rounded-2xl bg-red-600 hover:bg-red-700 text-white text-xs font-semibold flex items-center gap-2 transition-all shadow-lg shadow-red-600/20"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Member</span>
-          </button>
+          {canCreate ? (
+            <button
+              onClick={openAddModal}
+              className="px-4 py-2.5 rounded-2xl bg-red-600 hover:bg-red-700 text-white text-xs font-semibold flex items-center gap-2 transition-all shadow-lg shadow-red-600/20"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add Member</span>
+            </button>
+          ) : (
+            <div
+              title="You do not have permission to add new members (members.create)"
+              className="px-4 py-2.5 rounded-2xl bg-neutral-800 text-neutral-500 text-xs font-semibold flex items-center gap-2 cursor-not-allowed border border-neutral-700/50"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>Add Member</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -375,9 +397,20 @@ export const MembersView: React.FC<Props> = ({
                     <tr key={member.id} className="hover:bg-neutral-800/40 transition-colors">
                       {/* Member ID */}
                       <td className="py-4 px-5">
-                        <span className="font-mono font-bold text-red-400 bg-red-950/50 border border-red-800/40 px-2 py-1 rounded-lg">
-                          {member.member_id}
-                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onOpenMemberProfile) {
+                              onOpenMemberProfile(member);
+                            } else {
+                              setViewingMember(member);
+                            }
+                          }}
+                          className="font-mono font-bold text-red-400 hover:text-red-300 hover:underline bg-red-950/50 hover:bg-red-900/60 border border-red-800/40 px-2 py-1 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                          title="Click to open complete member profile & payment history"
+                        >
+                          <span>{member.member_id}</span>
+                        </button>
                       </td>
 
                       {/* Name */}
@@ -427,13 +460,15 @@ export const MembersView: React.FC<Props> = ({
                       {/* Actions */}
                       <td className="py-4 px-5 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => onOpenPaymentForMember(member)}
-                            title="Collect Fee / Record Payment"
-                            className="p-1.5 rounded-lg bg-emerald-950/60 border border-emerald-800/40 text-emerald-400 hover:bg-emerald-900/60 transition-colors"
-                          >
-                            <CreditCard className="w-3.5 h-3.5" />
-                          </button>
+                          {canRecordPayment && (
+                            <button
+                              onClick={() => onOpenPaymentForMember(member)}
+                              title="Collect Fee / Record Payment"
+                              className="p-1.5 rounded-lg bg-emerald-950/60 border border-emerald-800/40 text-emerald-400 hover:bg-emerald-900/60 transition-colors"
+                            >
+                              <CreditCard className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             onClick={() => setViewingMember(member)}
                             title="View Full Profile"
@@ -441,20 +476,24 @@ export const MembersView: React.FC<Props> = ({
                           >
                             <Eye className="w-3.5 h-3.5" />
                           </button>
-                          <button
-                            onClick={() => openEditModal(member)}
-                            title="Edit Member"
-                            className="p-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white transition-colors"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => setDeletingMember(member)}
-                            title="Delete Member"
-                            className="p-1.5 rounded-lg bg-neutral-800 hover:bg-red-950 text-neutral-400 hover:text-red-400 transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {canEdit && (
+                            <button
+                              onClick={() => openEditModal(member)}
+                              title="Edit Member"
+                              className="p-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white transition-colors"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {canDelete && (
+                            <button
+                              onClick={() => setDeletingMember(member)}
+                              title="Delete Member"
+                              className="p-1.5 rounded-lg bg-neutral-800 hover:bg-red-950 text-neutral-400 hover:text-red-400 transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

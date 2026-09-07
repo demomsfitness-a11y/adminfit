@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { GymSettings } from '../types';
+import { GymSettings, AdminAccount } from '../types';
+import { hasPermission } from '../lib/permissions';
 import {
   Settings,
   Dumbbell,
@@ -16,6 +17,7 @@ import {
   Sparkles,
   ExternalLink,
   AlertTriangle,
+  Lock,
 } from 'lucide-react';
 import { isSupabaseConfigured } from '../lib/supabase';
 
@@ -25,6 +27,7 @@ interface Props {
   onOpenConfig: () => void;
   onOpenSql: () => void;
   adminEmail: string;
+  currentAdmin?: AdminAccount;
 }
 
 export const SettingsView: React.FC<Props> = ({
@@ -33,7 +36,9 @@ export const SettingsView: React.FC<Props> = ({
   onOpenConfig,
   onOpenSql,
   adminEmail,
+  currentAdmin,
 }) => {
+  const canManageSettings = !currentAdmin || hasPermission(currentAdmin, 'settings.manage');
   const [gymName, setGymName] = useState(settings.gym_name || 'MS Fitness');
   const [tagline, setTagline] = useState(settings.tagline || 'Stronger Body, Stronger You');
   const [phone, setPhone] = useState(settings.phone || '+91 98765 43210');
@@ -208,14 +213,24 @@ export const SettingsView: React.FC<Props> = ({
         </div>
 
         <div className="pt-4 border-t border-neutral-800 flex items-center justify-end">
-          <button
-            type="submit"
-            disabled={saving}
-            className="px-6 py-3 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs transition-all shadow-lg shadow-red-600/25 flex items-center gap-2 disabled:opacity-50"
-          >
-            {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            <span>{saving ? 'Saving...' : 'Save Settings'}</span>
-          </button>
+          {canManageSettings ? (
+            <button
+              type="submit"
+              disabled={saving}
+              className="px-6 py-3 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs transition-all shadow-lg shadow-red-600/25 flex items-center gap-2 disabled:opacity-50"
+            >
+              {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              <span>{saving ? 'Saving...' : 'Save Settings'}</span>
+            </button>
+          ) : (
+            <div
+              title="You do not have permission to modify gym settings (settings.manage)"
+              className="px-6 py-3 rounded-2xl bg-neutral-800 text-neutral-500 font-bold text-xs flex items-center gap-2 cursor-not-allowed border border-neutral-700/50"
+            >
+              <Lock className="w-4 h-4" />
+              <span>Settings Modification Restricted</span>
+            </div>
+          )}
         </div>
       </form>
 

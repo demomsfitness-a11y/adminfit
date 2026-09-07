@@ -13,6 +13,7 @@ interface Props {
   plans?: MembershipPlan[];
   settings: GymSettings;
   adminEmail: string;
+  onOpenMemberProfile?: (member: Member | string) => void;
 }
 
 export const ReceiptModal: React.FC<Props> = ({
@@ -23,6 +24,7 @@ export const ReceiptModal: React.FC<Props> = ({
   plans,
   settings,
   adminEmail,
+  onOpenMemberProfile,
 }) => {
   const [emailStatus, setEmailStatus] = useState<'idle' | 'sending' | 'success' | 'error'>('idle');
   const [emailMessage, setEmailMessage] = useState<string>('');
@@ -45,13 +47,17 @@ export const ReceiptModal: React.FC<Props> = ({
     status: 'active',
   };
 
-  const effectiveTxnNumber = payment.transaction_number || extractUpiTransactionNumber(payment.notes);
+  const effectiveTxnNumber =
+    payment.upi_transaction_number ||
+    payment.transaction_number ||
+    extractUpiTransactionNumber(payment.notes);
   const effectivePlanName = resolveMemberPlanName(effectiveMember, plans, payment);
 
   const effectivePayment: Payment = {
     ...payment,
     plan_name: effectivePlanName,
     transaction_number: effectiveTxnNumber,
+    upi_transaction_number: effectiveTxnNumber,
   };
 
   const handleDownloadPdf = () => {
@@ -221,9 +227,23 @@ export const ReceiptModal: React.FC<Props> = ({
               </div>
               <div>
                 <span className="text-neutral-500 block text-[10px]">Member ID</span>
-                <span className="font-mono font-semibold text-red-400">
-                  {effectiveMember.member_id || payment.member_code || 'N/A'}
-                </span>
+                {onOpenMemberProfile ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenMemberProfile(effectiveMember)}
+                    className="font-mono font-semibold text-red-400 hover:text-red-300 hover:underline flex items-center gap-1 transition-colors"
+                    title="View Complete Member Profile"
+                  >
+                    <span>{effectiveMember.member_id || payment.member_code || 'N/A'}</span>
+                    <span className="text-[10px] bg-red-950/80 text-red-400 px-1 py-0.2 rounded border border-red-800/40 no-print">
+                      Profile
+                    </span>
+                  </button>
+                ) : (
+                  <span className="font-mono font-semibold text-red-400">
+                    {effectiveMember.member_id || payment.member_code || 'N/A'}
+                  </span>
+                )}
               </div>
               <div>
                 <span className="text-neutral-500 block text-[10px]">Registered Mobile</span>
@@ -367,7 +387,7 @@ export const ReceiptModal: React.FC<Props> = ({
           {/* Footer signature line */}
           <div className="pt-4 border-t border-neutral-800 flex items-end justify-between text-[11px] text-neutral-400">
             <div>
-              <p>Admin: {adminEmail || 'admin@msfitness.com'}</p>
+              <p>Admin: {adminEmail || 'Authorized Staff'}</p>
               <p className="text-[10px] text-neutral-500 mt-0.5">MS Fitness Management Software</p>
             </div>
             <div className="text-right">

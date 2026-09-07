@@ -1,10 +1,13 @@
 import React from 'react';
-import { LogOut, User, Database, Plus, CreditCard, Menu, ShieldCheck, CalendarCheck } from 'lucide-react';
+import { LogOut, User, Database, Plus, CreditCard, Menu, ShieldCheck, CalendarCheck, Crown } from 'lucide-react';
 import { isSupabaseConfigured, DEFAULT_SUPABASE_PROJECT_ID } from '../lib/supabase';
+import { AdminAccount } from '../types';
+import { getRoleLabel, isSuperAdmin } from '../lib/permissions';
 
 interface Props {
   title: string;
   adminEmail: string;
+  currentAdmin?: AdminAccount;
   onLogout: () => void;
   onOpenConfig: () => void;
   onOpenSql?: () => void;
@@ -18,6 +21,7 @@ interface Props {
 export const Header: React.FC<Props> = ({
   title,
   adminEmail,
+  currentAdmin,
   onLogout,
   onOpenConfig,
   onOpenSql,
@@ -109,15 +113,24 @@ export const Header: React.FC<Props> = ({
         {/* Admin profile & logout */}
         <div className="flex items-center gap-2 bg-neutral-900/90 border border-neutral-800/90 rounded-2xl p-1.5 pl-3">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-xl bg-red-600/20 border border-red-500/30 flex items-center justify-center text-red-400">
-              <User className="w-3.5 h-3.5" />
+            <div className={`w-7 h-7 rounded-xl flex items-center justify-center ${
+              isSuperAdmin(currentAdmin)
+                ? 'bg-amber-500/20 border border-amber-500/40 text-amber-400'
+                : 'bg-red-600/20 border border-red-500/30 text-red-400'
+            }`}>
+              {isSuperAdmin(currentAdmin) ? (
+                <Crown className="w-3.5 h-3.5 text-amber-400" />
+              ) : (
+                <User className="w-3.5 h-3.5" />
+              )}
             </div>
             <div className="hidden md:block text-left">
               <span className="block text-xs font-bold text-white leading-tight max-w-[140px] truncate">
-                {adminEmail.split('@')[0]}
+                {currentAdmin?.full_name || adminEmail.split('@')[0]}
               </span>
               <span className="text-[10px] text-neutral-400 leading-none flex items-center gap-0.5">
-                <ShieldCheck className="w-2.5 h-2.5 text-red-400" /> Admin
+                <ShieldCheck className="w-2.5 h-2.5 text-red-400" />{' '}
+                {currentAdmin ? getRoleLabel(currentAdmin.role) : 'Admin'}
               </span>
             </div>
           </div>

@@ -1,15 +1,21 @@
 import React, { useState } from 'react';
-import { MembershipPlan } from '../types';
-import { Layers, Plus, Edit2, Trash2, Check, X, ShieldAlert, Sparkles, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { MembershipPlan, AdminAccount } from '../types';
+import { hasPermission } from '../lib/permissions';
+import { Layers, Plus, Edit2, Trash2, Check, X, ShieldAlert, Sparkles, CheckCircle2, AlertTriangle, Lock } from 'lucide-react';
 
 interface Props {
   plans: MembershipPlan[];
   onAddPlan: (plan: Omit<MembershipPlan, 'id'>) => Promise<void>;
   onUpdatePlan: (id: string, updates: Partial<MembershipPlan>) => Promise<void>;
   onDeletePlan: (id: string, planName: string) => Promise<void>;
+  currentAdmin?: AdminAccount;
 }
 
-export const PlansView: React.FC<Props> = ({ plans, onAddPlan, onUpdatePlan, onDeletePlan }) => {
+export const PlansView: React.FC<Props> = ({ plans, onAddPlan, onUpdatePlan, onDeletePlan, currentAdmin }) => {
+  const canCreate = !currentAdmin || hasPermission(currentAdmin, 'plans.create');
+  const canEdit = !currentAdmin || hasPermission(currentAdmin, 'plans.edit');
+  const canDelete = !currentAdmin || hasPermission(currentAdmin, 'plans.delete');
+
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingPlan, setEditingPlan] = useState<MembershipPlan | null>(null);
   const [deletingPlan, setDeletingPlan] = useState<MembershipPlan | null>(null);
@@ -131,12 +137,22 @@ export const PlansView: React.FC<Props> = ({ plans, onAddPlan, onUpdatePlan, onD
             Configure pricing, durations, special benefits, and promotional discounts.
           </p>
         </div>
-        <button
-          onClick={handleOpenAdd}
-          className="px-4 py-2.5 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-semibold text-xs transition-all shadow-lg shadow-red-600/20 flex items-center gap-2"
-        >
-          <Plus className="w-4 h-4" /> Add New Plan
-        </button>
+        {canCreate ? (
+          <button
+            onClick={handleOpenAdd}
+            className="px-4 py-2.5 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-semibold text-xs transition-all shadow-lg shadow-red-600/20 flex items-center gap-2"
+          >
+            <Plus className="w-4 h-4" /> Add New Plan
+          </button>
+        ) : (
+          <div
+            title="You do not have permission to add membership plans (plans.create)"
+            className="px-4 py-2.5 rounded-2xl bg-neutral-800 text-neutral-500 text-xs font-semibold flex items-center gap-2 cursor-not-allowed border border-neutral-700/50"
+          >
+            <Lock className="w-3.5 h-3.5" />
+            <span>Add New Plan</span>
+          </div>
+        )}
       </div>
 
       {/* Plans Grid */}
@@ -215,20 +231,24 @@ export const PlansView: React.FC<Props> = ({ plans, onAddPlan, onUpdatePlan, onD
                 </span>
 
                 <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => handleOpenEdit(plan)}
-                    title="Edit Plan"
-                    className="p-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white transition-colors"
-                  >
-                    <Edit2 className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => setDeletingPlan(plan)}
-                    title="Delete Plan"
-                    className="p-2 rounded-xl bg-neutral-800 hover:bg-red-950 text-neutral-400 hover:text-red-400 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {canEdit && (
+                    <button
+                      onClick={() => handleOpenEdit(plan)}
+                      title="Edit Plan"
+                      className="p-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white transition-colors"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                  )}
+                  {canDelete && (
+                    <button
+                      onClick={() => setDeletingPlan(plan)}
+                      title="Delete Plan"
+                      className="p-2 rounded-xl bg-neutral-800 hover:bg-red-950 text-neutral-400 hover:text-red-400 transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

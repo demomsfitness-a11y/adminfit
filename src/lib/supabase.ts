@@ -208,14 +208,16 @@ CREATE TABLE IF NOT EXISTS public.payments (
   total_due NUMERIC(10, 2) NOT NULL DEFAULT 0,
   remaining_balance NUMERIC(10, 2) NOT NULL DEFAULT 0,
   payment_method TEXT NOT NULL DEFAULT 'Cash',
+  upi_transaction_number TEXT NULL,
   payment_date DATE NOT NULL DEFAULT CURRENT_DATE,
   plan_name TEXT DEFAULT 'Membership Fee',
   notes TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Ensure plan_name column exists if table was created previously
+-- Ensure plan_name and upi_transaction_number columns exist if table was created previously
 ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS plan_name TEXT DEFAULT 'Membership Fee';
+ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS upi_transaction_number TEXT NULL;
 
 -- 4. Create APPOINTMENTS & BOOKINGS table (Stores all appointment booking form submissions)
 CREATE TABLE IF NOT EXISTS public.appointments (
@@ -253,43 +255,91 @@ INSERT INTO public.gym_settings (gym_name, tagline, phone, email, address, upi_i
 SELECT 'MS Fitness', 'Stronger Body, Stronger You', '+91 98765 43210', 'contact@msfitness.com', '123 Powerhouse Street, Fitness District, New Delhi, India', 'msfitness@upi'
 WHERE NOT EXISTS (SELECT 1 FROM public.gym_settings LIMIT 1);
 
--- 6. Create ACTIVITY LOGS table
+-- 6. Create ACTIVITY LOGS table (Enhanced Audit Trail)
 CREATE TABLE IF NOT EXISTS public.activity_logs (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  admin_id TEXT,
+  admin_name TEXT,
+  admin_email TEXT NOT NULL,
+  role TEXT DEFAULT 'admin',
   action TEXT NOT NULL,
+  module TEXT DEFAULT 'General',
   description TEXT NOT NULL,
-  timestamp TIMESTAMPTZ DEFAULT NOW(),
-  admin_email TEXT NOT NULL
+  target_type TEXT DEFAULT '',
+  target_id TEXT DEFAULT '',
+  ip_address TEXT DEFAULT '',
+  status TEXT DEFAULT 'success',
+  timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 7. Indexes for ultra fast queries
+-- Ensure enhanced activity log columns exist if table was created previously
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS admin_id TEXT;
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS admin_name TEXT;
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'admin';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS module TEXT DEFAULT 'General';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS target_type TEXT DEFAULT '';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS target_id TEXT DEFAULT '';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS ip_address TEXT DEFAULT '';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'success';
+
+-- 7. Create ADMINS table (Multi-Admin Management & Granular RBAC)
+CREATE TABLE IF NOT EXISTS public.admins (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  admin_id TEXT UNIQUE NOT NULL,
+  email TEXT UNIQUE NOT NULL,
+  full_name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'admin',
+  status TEXT NOT NULL DEFAULT 'active',
+  permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_login TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Seed initial Super Admin if admins table is empty
+INSERT INTO public.admins (admin_id, email, full_name, role, status, permissions)
+SELECT 'ADM-0001', 'singhalmanav58@gmail.com', 'Manav Singhal', 'super_admin', 'active', '["*"]'::jsonb
+WHERE NOT EXISTS (SELECT 1 FROM public.admins LIMIT 1);
+
+-- Migrate any legacy placeholder admin email
+UPDATE public.admins SET email = 'singhalmanav58@gmail.com', full_name = 'Manav Singhal' WHERE email = 'admin@msfitness.com';
+
+-- 8. Indexes for ultra fast queries
 CREATE INDEX IF NOT EXISTS idx_members_member_id ON public.members(member_id);
 CREATE INDEX IF NOT EXISTS idx_members_status ON public.members(status);
 CREATE INDEX IF NOT EXISTS idx_members_expiry ON public.members(membership_expiry);
 CREATE INDEX IF NOT EXISTS idx_payments_member_id ON public.payments(member_id);
 CREATE INDEX IF NOT EXISTS idx_payments_date ON public.payments(payment_date);
+CREATE INDEX IF NOT EXISTS idx_payments_upi_txn ON public.payments(upi_transaction_number);
 CREATE INDEX IF NOT EXISTS idx_activity_logs_time ON public.activity_logs(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_logs_email ON public.activity_logs(admin_email);
 CREATE INDEX IF NOT EXISTS idx_appointments_date ON public.appointments(appointment_date);
 CREATE INDEX IF NOT EXISTS idx_appointments_status ON public.appointments(status);
 CREATE INDEX IF NOT EXISTS idx_appointments_mobile ON public.appointments(mobile);
+CREATE INDEX IF NOT EXISTS idx_admins_email ON public.admins(email);
+CREATE INDEX IF NOT EXISTS idx_admins_id ON public.admins(admin_id);
+CREATE INDEX IF NOT EXISTS idx_admins_role ON public.admins(role);
+CREATE INDEX IF NOT EXISTS idx_admins_status ON public.admins(status);
 
--- 8. Enable Row Level Security (RLS)
+-- 9. Enable Row Level Security (RLS)
 ALTER TABLE public.members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.membership_plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.appointments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gym_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.activity_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.admins ENABLE ROW LEVEL SECURITY;
 
--- 9. Table Grants for Roles
+-- 10. Table Grants for Roles
 GRANT ALL ON TABLE public.members TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.membership_plans TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.payments TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.appointments TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.gym_settings TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.activity_logs TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.admins TO anon, authenticated, service_role;
 
--- 10. RLS Policies (Full CRUD access for admins and visitors)
+-- 11. RLS Policies (Full CRUD access for admins and visitors)
 DROP POLICY IF EXISTS "Allow public access on members" ON public.members;
 DROP POLICY IF EXISTS "Admin full access on members" ON public.members;
 DROP POLICY IF EXISTS "members_all_access" ON public.members;
@@ -328,6 +378,10 @@ DROP POLICY IF EXISTS "Admin full access on activity_logs" ON public.activity_lo
 DROP POLICY IF EXISTS "logs_all_access" ON public.activity_logs;
 CREATE POLICY "logs_all_access" ON public.activity_logs
   FOR ALL TO public USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "admins_all_access" ON public.admins;
+CREATE POLICY "admins_all_access" ON public.admins
+  FOR ALL TO public USING (true) WITH CHECK (true);
 `;
 
 export const SUPABASE_FIX_COLUMNS_SQL = `-- Run this in Supabase SQL Editor to add any missing columns to your existing tables:
@@ -360,4 +414,87 @@ ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS discount NUMERIC(10, 2) NOT
 ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS previous_balance NUMERIC(10, 2) NOT NULL DEFAULT 0;
 ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS total_due NUMERIC(10, 2) NOT NULL DEFAULT 0;
 ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS remaining_balance NUMERIC(10, 2) NOT NULL DEFAULT 0;
+ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS upi_transaction_number TEXT NULL;
+
+-- 5. ACTIVITY LOGS table columns
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS admin_id TEXT;
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS admin_name TEXT;
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'admin';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS module TEXT DEFAULT 'General';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS target_type TEXT DEFAULT '';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS target_id TEXT DEFAULT '';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS ip_address TEXT DEFAULT '';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'success';
+`;
+
+// Safe Idempotent SQL Migration for Multi-Admin Management & RBAC
+export const SUPABASE_MIGRATION_ADMINS_SQL = `-- Migration: Multi-Admin Management & Granular RBAC Permissions
+-- Creates admins table, seeds initial Super Admin, and enhances activity logs
+CREATE TABLE IF NOT EXISTS public.admins (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  admin_id TEXT UNIQUE NOT NULL,
+  email TEXT UNIQUE NOT NULL,
+  full_name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'admin',
+  status TEXT NOT NULL DEFAULT 'active',
+  permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_login TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Seed initial Super Admin if admins table is empty
+INSERT INTO public.admins (admin_id, email, full_name, role, status, permissions)
+SELECT 'ADM-0001', 'singhalmanav58@gmail.com', 'Manav Singhal', 'super_admin', 'active', '["*"]'::jsonb
+WHERE NOT EXISTS (SELECT 1 FROM public.admins LIMIT 1);
+
+-- Migrate any legacy placeholder admin email
+UPDATE public.admins SET email = 'singhalmanav58@gmail.com', full_name = 'Manav Singhal' WHERE email = 'admin@msfitness.com';
+
+-- Enhance activity_logs table
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS admin_id TEXT;
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS admin_name TEXT;
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'admin';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS module TEXT DEFAULT 'General';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS target_type TEXT DEFAULT '';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS target_id TEXT DEFAULT '';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS ip_address TEXT DEFAULT '';
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'success';
+
+-- Indexes for ultra fast lookups
+CREATE INDEX IF NOT EXISTS idx_admins_email ON public.admins(email);
+CREATE INDEX IF NOT EXISTS idx_admins_id ON public.admins(admin_id);
+CREATE INDEX IF NOT EXISTS idx_admins_role ON public.admins(role);
+CREATE INDEX IF NOT EXISTS idx_admins_status ON public.admins(status);
+
+-- Grants & RLS
+GRANT ALL ON TABLE public.admins TO anon, authenticated, service_role;
+ALTER TABLE public.admins ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "admins_all_access" ON public.admins;
+CREATE POLICY "admins_all_access" ON public.admins
+  FOR ALL TO public USING (true) WITH CHECK (true);
+`;
+
+// Safe Idempotent SQL Migration for UPI Transaction Numbers
+export const SUPABASE_MIGRATION_UPI_SQL = `-- Migration: Add upi_transaction_number to payments table
+-- Safe idempotent migration: checks if upi_transaction_number exists before creating it
+-- Preserves all existing payment records without modification
+DO $$ 
+BEGIN 
+  IF NOT EXISTS (
+    SELECT 1 
+    FROM information_schema.columns 
+    WHERE table_schema = 'public' 
+      AND table_name = 'payments' 
+      AND column_name = 'upi_transaction_number'
+  ) THEN 
+    ALTER TABLE public.payments ADD COLUMN upi_transaction_number TEXT NULL;
+  END IF; 
+END $$;
+
+-- Direct ALTER TABLE IF NOT EXISTS support
+ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS upi_transaction_number TEXT NULL;
+
+-- Index for fast lookups by UPI transaction number
+CREATE INDEX IF NOT EXISTS idx_payments_upi_txn ON public.payments(upi_transaction_number);
 `;

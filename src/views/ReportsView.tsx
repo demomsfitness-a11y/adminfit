@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { Member, Payment, GymSettings } from '../types';
-import { BarChart3, Download, FileSpreadsheet, FileText, Calendar, Filter, IndianRupee, Users } from 'lucide-react';
+import { Member, Payment, GymSettings, AdminAccount } from '../types';
+import { hasPermission } from '../lib/permissions';
+import { BarChart3, Download, FileSpreadsheet, FileText, Calendar, Filter, IndianRupee, Users, Lock } from 'lucide-react';
 import { exportReportToPdf } from '../lib/pdfReceipt';
 
 interface Props {
   members: Member[];
   payments: Payment[];
   settings: GymSettings;
+  currentAdmin?: AdminAccount;
 }
 
 type ReportType =
@@ -17,7 +19,8 @@ type ReportType =
   | 'expired_members'
   | 'outstanding_dues';
 
-export const ReportsView: React.FC<Props> = ({ members, payments, settings }) => {
+export const ReportsView: React.FC<Props> = ({ members, payments, settings, currentAdmin }) => {
+  const canExport = !currentAdmin || hasPermission(currentAdmin, 'reports.export');
   const [reportType, setReportType] = useState<ReportType>('daily_collection');
   const [startDate, setStartDate] = useState(
     new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().slice(0, 10)
@@ -113,18 +116,30 @@ export const ReportsView: React.FC<Props> = ({ members, payments, settings }) =>
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleExportCsv}
-            className="px-4 py-2 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold flex items-center gap-2 border border-neutral-700 transition-colors"
-          >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-400" /> Export CSV
-          </button>
-          <button
-            onClick={handleExportPdf}
-            className="px-4 py-2 rounded-2xl bg-red-600 hover:bg-red-700 text-white text-xs font-semibold flex items-center gap-2 transition-all shadow-lg shadow-red-600/20"
-          >
-            <FileText className="w-4 h-4" /> Download PDF Report
-          </button>
+          {canExport ? (
+            <>
+              <button
+                onClick={handleExportCsv}
+                className="px-4 py-2 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold flex items-center gap-2 border border-neutral-700 transition-colors"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-400" /> Export CSV
+              </button>
+              <button
+                onClick={handleExportPdf}
+                className="px-4 py-2 rounded-2xl bg-red-600 hover:bg-red-700 text-white text-xs font-semibold flex items-center gap-2 transition-all shadow-lg shadow-red-600/20"
+              >
+                <FileText className="w-4 h-4" /> Download PDF Report
+              </button>
+            </>
+          ) : (
+            <div
+              title="You do not have permission to export reports (reports.export)"
+              className="px-4 py-2 rounded-2xl bg-neutral-800/80 text-neutral-500 text-xs font-medium flex items-center gap-2 border border-neutral-700/50 cursor-not-allowed"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>Export Restricted</span>
+            </div>
+          )}
         </div>
       </div>
 

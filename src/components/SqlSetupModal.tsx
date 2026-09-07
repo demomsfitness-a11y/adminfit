@@ -1,6 +1,13 @@
 import React, { useState } from 'react';
-import { SUPABASE_SETUP_SQL, SUPABASE_FIX_COLUMNS_SQL, SUPABASE_DASHBOARD_SQL_URL, DEFAULT_SUPABASE_PROJECT_ID } from '../lib/supabase';
-import { Database, Copy, Check, ExternalLink, X, ShieldAlert, Sparkles, Wrench } from 'lucide-react';
+import {
+  SUPABASE_SETUP_SQL,
+  SUPABASE_FIX_COLUMNS_SQL,
+  SUPABASE_MIGRATION_UPI_SQL,
+  SUPABASE_MIGRATION_ADMINS_SQL,
+  SUPABASE_DASHBOARD_SQL_URL,
+  DEFAULT_SUPABASE_PROJECT_ID,
+} from '../lib/supabase';
+import { Database, Copy, Check, ExternalLink, X, ShieldAlert, Sparkles, Wrench, CreditCard, UserCog } from 'lucide-react';
 
 interface Props {
   isOpen: boolean;
@@ -8,12 +15,19 @@ interface Props {
 }
 
 export const SqlSetupModal: React.FC<Props> = ({ isOpen, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'fix' | 'full'>('fix');
+  const [activeTab, setActiveTab] = useState<'admins' | 'upi' | 'fix' | 'full'>('admins');
   const [copied, setCopied] = useState(false);
 
   if (!isOpen) return null;
 
-  const currentSql = activeTab === 'fix' ? SUPABASE_FIX_COLUMNS_SQL : SUPABASE_SETUP_SQL;
+  const currentSql =
+    activeTab === 'admins'
+      ? SUPABASE_MIGRATION_ADMINS_SQL
+      : activeTab === 'upi'
+      ? SUPABASE_MIGRATION_UPI_SQL
+      : activeTab === 'fix'
+      ? SUPABASE_FIX_COLUMNS_SQL
+      : SUPABASE_SETUP_SQL;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(currentSql);
@@ -31,7 +45,7 @@ export const SqlSetupModal: React.FC<Props> = ({ isOpen, onClose }) => {
               <Database className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-white tracking-wide">Supabase Database Setup & Fix</h2>
+              <h2 className="text-xl font-bold text-white tracking-wide">Supabase Database Setup & Migrations</h2>
               <p className="text-xs text-neutral-400">
                 SQL migrations for project{' '}
                 <span className="text-emerald-400 font-mono font-semibold">{DEFAULT_SUPABASE_PROJECT_ID}</span>
@@ -49,7 +63,29 @@ export const SqlSetupModal: React.FC<Props> = ({ isOpen, onClose }) => {
         {/* Modal Body */}
         <div className="p-6 space-y-4">
           {/* Tabs */}
-          <div className="flex items-center gap-2 border-b border-neutral-800 pb-3">
+          <div className="flex items-center gap-2 border-b border-neutral-800 pb-3 flex-wrap">
+            <button
+              onClick={() => setActiveTab('admins')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all ${
+                activeTab === 'admins'
+                  ? 'bg-red-600 text-white shadow-md shadow-red-600/20'
+                  : 'bg-neutral-800 text-neutral-400 hover:text-white'
+              }`}
+            >
+              <UserCog className="w-3.5 h-3.5" />
+              Admins & RBAC Migration
+            </button>
+            <button
+              onClick={() => setActiveTab('upi')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all ${
+                activeTab === 'upi'
+                  ? 'bg-red-600 text-white shadow-md shadow-red-600/20'
+                  : 'bg-neutral-800 text-neutral-400 hover:text-white'
+              }`}
+            >
+              <CreditCard className="w-3.5 h-3.5" />
+              UPI Column Migration
+            </button>
             <button
               onClick={() => setActiveTab('fix')}
               className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all ${
@@ -59,7 +95,7 @@ export const SqlSetupModal: React.FC<Props> = ({ isOpen, onClose }) => {
               }`}
             >
               <Wrench className="w-3.5 h-3.5" />
-              Fix Missing Columns ('dob', etc.)
+              Fix Missing Columns
             </button>
             <button
               onClick={() => setActiveTab('full')}

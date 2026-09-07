@@ -369,6 +369,11 @@ export const DashboardView: React.FC<Props> = ({
                         <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-300">
                           {payment.payment_method}
                         </span>
+                        {payment.payment_method === 'UPI' && (payment.upi_transaction_number || payment.transaction_number) && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-950/80 border border-blue-800/40 text-blue-300">
+                            UPI: {payment.upi_transaction_number || payment.transaction_number}
+                          </span>
+                        )}
                       </div>
                       <p className="text-[11px] text-neutral-400 font-mono">
                         {payment.receipt_number || payment.payment_id} • {new Date(payment.payment_date).toLocaleDateString('en-IN')}
