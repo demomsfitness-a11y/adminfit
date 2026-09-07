@@ -12,6 +12,15 @@ export const DEFAULT_INITIAL_ADMINS: Omit<AdminAccount, 'id'>[] = [
     permissions: ALL_PERMISSIONS.map((p) => p.key),
     created_at: '2025-01-01T00:00:00.000Z',
   },
+  {
+    admin_id: 'ADM-0002',
+    full_name: 'MS Fitness Super Admin',
+    email: 'admin@msfitness.com',
+    role: 'super_admin',
+    status: 'active',
+    permissions: ALL_PERMISSIONS.map((p) => p.key),
+    created_at: '2025-01-01T00:00:00.000Z',
+  },
 ];
 
 // Local memory fallback if Supabase table is not yet created
@@ -22,13 +31,7 @@ function getStoredLocalAdmins(): AdminAccount[] {
     const raw = localStorage.getItem(LOCAL_ADMINS_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        // Purge any stale demo entries with invalid emails
-        const filtered = parsed.filter(
-          (a) => a && a.email && a.email.toLowerCase() !== 'admin@msfitness.com'
-        );
-        if (filtered.length > 0) return filtered;
-      }
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
     }
   } catch (e) {
     console.warn('Error reading local admins:', e);
@@ -174,14 +177,17 @@ export async function fetchAdminByEmail(email: string): Promise<AdminAccount | n
       }
 
       // If table doesn't exist or user is super admin default
-      if (cleanEmail === 'singhalmanav58@gmail.com') {
+      if (
+        cleanEmail === 'singhalmanav58@gmail.com' ||
+        cleanEmail === 'admin@msfitness.com'
+      ) {
         const foundLocal = getStoredLocalAdmins().find((a) => a.email.toLowerCase() === cleanEmail);
         if (foundLocal) return foundLocal;
 
         return {
           id: `super-${Date.now()}`,
           admin_id: 'ADM-0001',
-          full_name: 'Manav Singhal',
+          full_name: cleanEmail.includes('singhal') ? 'Manav Singhal' : 'MS Fitness Super Admin',
           email: cleanEmail,
           role: 'super_admin',
           status: 'active',
@@ -200,11 +206,11 @@ export async function fetchAdminByEmail(email: string): Promise<AdminAccount | n
   if (localMatch) return localMatch;
 
   // If default super admin
-  if (cleanEmail === 'singhalmanav58@gmail.com') {
+  if (cleanEmail === 'singhalmanav58@gmail.com' || cleanEmail === 'admin@msfitness.com') {
     return {
       id: 'admin-super-auto',
       admin_id: 'ADM-0001',
-      full_name: 'Manav Singhal',
+      full_name: cleanEmail.includes('singhal') ? 'Manav Singhal' : 'MS Fitness Super Admin',
       email: cleanEmail,
       role: 'super_admin',
       status: 'active',

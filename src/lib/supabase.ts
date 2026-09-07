@@ -298,11 +298,8 @@ CREATE TABLE IF NOT EXISTS public.admins (
 
 -- Seed initial Super Admin if admins table is empty
 INSERT INTO public.admins (admin_id, email, full_name, role, status, permissions)
-SELECT 'ADM-0001', 'singhalmanav58@gmail.com', 'Manav Singhal', 'super_admin', 'active', '["*"]'::jsonb
+SELECT 'ADM-0001', 'admin@msfitness.com', 'MS Fitness Super Admin', 'super_admin', 'active', '["*"]'::jsonb
 WHERE NOT EXISTS (SELECT 1 FROM public.admins LIMIT 1);
-
--- Migrate any legacy placeholder admin email
-UPDATE public.admins SET email = 'singhalmanav58@gmail.com', full_name = 'Manav Singhal' WHERE email = 'admin@msfitness.com';
 
 -- 8. Indexes for ultra fast queries
 CREATE INDEX IF NOT EXISTS idx_members_member_id ON public.members(member_id);
@@ -445,11 +442,8 @@ CREATE TABLE IF NOT EXISTS public.admins (
 
 -- Seed initial Super Admin if admins table is empty
 INSERT INTO public.admins (admin_id, email, full_name, role, status, permissions)
-SELECT 'ADM-0001', 'singhalmanav58@gmail.com', 'Manav Singhal', 'super_admin', 'active', '["*"]'::jsonb
+SELECT 'ADM-0001', 'admin@msfitness.com', 'MS Fitness Super Admin', 'super_admin', 'active', '["*"]'::jsonb
 WHERE NOT EXISTS (SELECT 1 FROM public.admins LIMIT 1);
-
--- Migrate any legacy placeholder admin email
-UPDATE public.admins SET email = 'singhalmanav58@gmail.com', full_name = 'Manav Singhal' WHERE email = 'admin@msfitness.com';
 
 -- Enhance activity_logs table
 ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS admin_id TEXT;

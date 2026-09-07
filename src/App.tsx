@@ -343,7 +343,7 @@ export default function App() {
       id: 'super-admin-root',
       admin_id: 'ADM-0001',
       full_name: 'Super Administrator',
-      email: adminEmail || '',
+      email: adminEmail || 'admin@msfitness.com',
       role: 'super_admin',
       status: 'active',
       permissions: ALL_PERMISSIONS.map((p) => p.key),
@@ -360,7 +360,7 @@ export default function App() {
       alert('Access Denied: You do not have permission to register members.');
       return;
     }
-    const userEmail = currentAdmin || adminEmail || '';
+    const userEmail = currentAdmin || adminEmail || 'admin@msfitness.com';
     const nextCode = await generateNextMemberId();
     await createMember({ ...memberData, member_id: nextCode }, userEmail);
     await loadGymData();
@@ -371,7 +371,7 @@ export default function App() {
       alert('Access Denied: You do not have permission to edit member profiles.');
       return;
     }
-    const userEmail = currentAdmin || adminEmail || '';
+    const userEmail = currentAdmin || adminEmail || 'admin@msfitness.com';
     await updateMember(id, updates, userEmail);
     await loadGymData();
   };
@@ -381,7 +381,7 @@ export default function App() {
       alert('Access Denied: You do not have permission to delete member records.');
       return;
     }
-    const userEmail = currentAdmin || adminEmail || '';
+    const userEmail = currentAdmin || adminEmail || 'admin@msfitness.com';
     await deleteMember(id, name, code, userEmail);
     await loadGymData();
   };
@@ -394,7 +394,7 @@ export default function App() {
       alert('Access Denied: You do not have permission to create membership plans.');
       return;
     }
-    const userEmail = currentAdmin || adminEmail || '';
+    const userEmail = currentAdmin || adminEmail || 'admin@msfitness.com';
     await createPlan(planData, userEmail);
     await loadGymData();
   };
@@ -404,7 +404,7 @@ export default function App() {
       alert('Access Denied: You do not have permission to modify membership plans.');
       return;
     }
-    const userEmail = currentAdmin || adminEmail || '';
+    const userEmail = currentAdmin || adminEmail || 'admin@msfitness.com';
     await updatePlan(id, updates, userEmail);
     await loadGymData();
   };
@@ -414,7 +414,7 @@ export default function App() {
       alert('Access Denied: You do not have permission to delete membership plans.');
       return;
     }
-    const userEmail = currentAdmin || adminEmail || '';
+    const userEmail = currentAdmin || adminEmail || 'admin@msfitness.com';
     await deletePlan(id, planName, userEmail);
     await loadGymData();
   };
@@ -441,7 +441,7 @@ export default function App() {
       alert('Access Denied: You do not have permission to record payments or issue receipts.');
       throw new Error('Access Denied: payments.create');
     }
-    const userEmail = currentAdmin || adminEmail || '';
+    const userEmail = currentAdmin || adminEmail || 'admin@msfitness.com';
     const member = members.find((m) => m.id === payload.member_id);
 
     const nextPaymentId = await generateNextPaymentId();
@@ -498,7 +498,7 @@ export default function App() {
       alert('Access Denied: You do not have permission to modify gym settings.');
       return;
     }
-    const userEmail = currentAdmin || adminEmail || '';
+    const userEmail = currentAdmin || adminEmail || 'admin@msfitness.com';
     await updateSettings(updates, userEmail);
     await loadGymData();
   };

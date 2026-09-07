@@ -194,7 +194,7 @@ export async function logActivity(
     ip_address?: string;
   }
 ) {
-  let email = '';
+  let email = 'admin@msfitness.com';
   let adminId = '';
   let adminName = '';
   let role = 'admin';
@@ -203,9 +203,9 @@ export async function logActivity(
     email = admin.trim();
     adminName = email.split('@')[0];
   } else if (admin && typeof admin === 'object') {
-    email = admin.email || '';
+    email = admin.email || 'admin@msfitness.com';
     adminId = admin.admin_id || '';
-    adminName = admin.full_name || (email ? email.split('@')[0] : 'Admin');
+    adminName = admin.full_name || email.split('@')[0];
     role = admin.role || 'admin';
   }
 
